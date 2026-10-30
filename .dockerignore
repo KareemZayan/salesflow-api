@@ -1,0 +1,43 @@
+node_modules
+.pnpm-store
+dist
+coverage
+test-results
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Secrets / env (injected at runtime, never baked into images)
+.env
+.env.*
+!.env.example
+
+# VCS & CI
+.git
+.gitignore
+.github
+.husky
+
+# Docs & tooling not needed at runtime
+README.md
+docs
+CLAUDE.md
+PROJECT_STATUS.md
+.claude
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Docker files themselves
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Local data
+docker-data
+postgres-data
+redis-data
+*.dump

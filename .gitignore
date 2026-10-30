@@ -1,0 +1,73 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.pnp.*
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Environment & secrets (only .env.example is committed)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test & coverage
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+
+# IDE / editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.sublime-*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker local data & overrides
+docker-data/
+postgres-data/
+redis-data/
+docker-compose.override.yml
+
+# Database dumps / local DB files
+*.sql.gz
+*.dump
+*.sqlite
+*.sqlite3
+*.db
+
+# Prisma (generated client lives in node_modules; migrations ARE committed)
+# prisma/migrations/ and prisma/migrations/migration_lock.toml must be tracked
+
+# Claude Code local settings (CLAUDE.md IS committed)
+.claude/settings.local.json
+.claude/*.local.*
+
+# Temp
+tmp/
+temp/
+.cache/
+.eslintcache
+*.local

@@ -1,0 +1,56 @@
+{
+  "name": "salesflow-crm",
+  "version": "1.0.0",
+  "description": "SalesFlow CRM backend API",
+  "scripts": {
+    "start:dev": "nest start --watch",
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.3.0",
+      "onFail": "download"
+    }
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "@nestjs/common": "^11.2.8",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^11.2.8",
+    "@nestjs/platform-express": "^11.2.8",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@nestjs/cli": "^11.0.24",
+    "@nestjs/testing": "^11.2.8",
+    "@swc/core": "^1.16.20",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/supertest": "^7.2.1",
+    "@vitest/coverage-v8": "^5.0.5",
+    "eslint": "^10.13.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
+    "supertest": "^7.3.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "unplugin-swc": "^2.0.0",
+    "vitest": "^5.0.5"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  }
+}

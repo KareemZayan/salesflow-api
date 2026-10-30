@@ -45,11 +45,10 @@ playwright-report/
 Thumbs.db
 desktop.ini
 
-# Docker local data & overrides
+# Docker local data
 docker-data/
 postgres-data/
 redis-data/
-docker-compose.override.yml
 
 # Database dumps / local DB files
 *.sql.gz

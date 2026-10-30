@@ -1,19 +1,14 @@
 import 'reflect-metadata';
-import { ValidationPipe } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
-import { APP_CONFIG_KEY, AppConfig } from './config/app.config';
+import { configureApp } from './app.setup';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
-  const config = app.get(ConfigService).getOrThrow<AppConfig>(APP_CONFIG_KEY);
-
-  app.setGlobalPrefix(config.globalPrefix);
-  app.enableCors({ origin: config.corsOrigins });
-  app.useGlobalPipes(
-    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
-  );
+  // bufferLogs holds early Nest logs until pino is attached, so all output is structured.
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  app.useLogger(app.get(Logger));
+  const config = configureApp(app);
 
   await app.listen(config.port);
 }

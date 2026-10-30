@@ -8,6 +8,14 @@ export interface AppConfig {
   port: number;
   globalPrefix: string;
   corsOrigins: string[];
+  logLevel: Env['LOG_LEVEL'];
+  postgres: HostPort;
+  redis: HostPort;
+}
+
+interface HostPort {
+  host: string;
+  port: number;
 }
 
 export const appConfig = registerAs(
@@ -20,5 +28,8 @@ export const appConfig = registerAs(
       .split(',')
       .map((origin) => origin.trim())
       .filter(Boolean),
+    logLevel: process.env.LOG_LEVEL as Env['LOG_LEVEL'],
+    postgres: { host: process.env.POSTGRES_HOST as string, port: Number(process.env.POSTGRES_PORT) },
+    redis: { host: process.env.REDIS_HOST as string, port: Number(process.env.REDIS_PORT) },
   }),
 );

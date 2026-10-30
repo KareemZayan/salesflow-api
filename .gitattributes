@@ -1,2 +1,4 @@
 # Shell scripts run inside Linux containers: CRLF would break them.
 *.sh text eol=lf
+
+.husky/* text eol=lf

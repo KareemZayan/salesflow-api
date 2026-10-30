@@ -1,13 +1,16 @@
 # PROJECT_STATUS
 
 ## Current phase
+
 Phase 2 — Docker & infrastructure — done (awaiting your review / commit)
 
 ## Completed phases
+
 - Phase 1 — Bootstrap ✅ (2026-10-30)
 - Phase 2 — Docker & infrastructure ✅ (2026-10-30)
 
 ## Decisions log
+
 - 2026-10-30 — NestJS 11 (CommonJS), not 12 — v12 is ESM-only; ESM would add `.js` import suffixes and ecosystem risk (Prisma, nestjs-cls, bull-board)
 - 2026-10-30 — TypeScript ^6, not 7 — Nest CLI and typescript-eslint don't support TS 7 yet; revisit when they do
 - 2026-10-30 — `tsconfig` uses module/moduleResolution `node16`; `rootDir: ./src` set in tsconfig.build.json (TS 6 requirement)
@@ -21,13 +24,18 @@ Phase 2 — Docker & infrastructure — done (awaiting your review / commit)
 - 2026-10-30 — Compose `api` forces `NODE_ENV=production` (pino-pretty is dev-only); `docker-compose.override.yml` is the committed dev setup (hot reload, DB/Redis published on 127.0.0.1)
 - 2026-10-30 — Queue in e2e: not decided yet (decide in Phase 12)
 
+- 2026-10-30 — Husky 9 + lint-staged + commitlint (conventional) added. Hooks: pre-commit = lint-staged (eslint --fix + prettier), commit-msg = commitlint. No typecheck in the hook (CI runs it in Phase 16). `prepare` is `husky || true` so Docker prod installs (no husky, no .git) don't fail
+
 ## Open questions
-- Husky / lint-staged / commitlint: agreed to do as a separate small step later (repo is now a git repo).
+
+- None.
 
 ## Next step
-Phase 3 — ERD review (`docs/erd.md`, incl. multi-tenancy design) — only when you ask. (Husky/commitlint step can be slotted before it if you prefer.)
+
+Phase 3 — ERD review (`docs/erd.md`, incl. multi-tenancy design) — only when you ask.
 
 ## Notes for next session (to save context)
+
 - Config: `src/config/` (zod `env.schema.ts`, `validate-env.ts`, `app.config.ts` registerAs `app`). Never read `process.env` outside config.
 - Tests: unit `*.spec.ts` next to code (`pnpm test`); e2e in `test/e2e/*.e2e-spec.ts` (`pnpm test:e2e`, `vitest.e2e.config.mts`, forces unreachable DB/Redis ports and silent logs).
 - Docker: `pnpm docker:up` = dev (override, hot reload). Prod-like: `docker compose -f docker-compose.yml up --build`. Set `POSTGRES_HOST_PORT` / `REDIS_HOST_PORT` in `.env` if local ports are taken (6379 was taken on the owner's machine).

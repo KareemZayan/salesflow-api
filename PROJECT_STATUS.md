@@ -2,12 +2,14 @@
 
 ## Current phase
 
-Phase 2 — Docker & infrastructure — done (awaiting your review / commit)
+Phase 3 — ERD review — done (approved 2026-10-31)
 
 ## Completed phases
 
 - Phase 1 — Bootstrap ✅ (2026-10-30)
 - Phase 2 — Docker & infrastructure ✅ (2026-10-30)
+- Quality gates (Husky / lint-staged / commitlint) ✅ (2026-10-30)
+- Phase 3 — ERD review ✅ (2026-10-31)
 
 ## Decisions log
 
@@ -26,13 +28,16 @@ Phase 2 — Docker & infrastructure — done (awaiting your review / commit)
 
 - 2026-10-30 — Husky 9 + lint-staged + commitlint (conventional) added. Hooks: pre-commit = lint-staged (eslint --fix + prettier), commit-msg = commitlint. No typecheck in the hook (CI runs it in Phase 16). `prepare` is `husky || true` so Docker prod installs (no husky, no .git) don't fail
 
+- 2026-10-31 — ERD approved (`docs/erd.md`, 17 entities incl. `DealStageHistory`). Locked: global unique login email; composite FKs `(id, organizationId)` on tenant relations; `Restrict` by default (no `SetNull`), users deactivated never deleted, no org deletion in app; no uniqueness on contact/company/lead email or name; `Activity` has nullable FKs, only `AuditLog` is polymorphic; org onboarding via idempotent CLI script (no public endpoint); money `Decimal(14,2)` + `Organization.defaultCurrency`; RLS deferred to Phase 15; scoping via Prisma client extension (finalized in Phase 5)
+- 2026-10-31 — Raw-SQL pieces needed in the Phase 4 migration: partial unique index (one default pipeline per org) and partial index on open tasks `(status, dueDate)`
+
 ## Open questions
 
 - None.
 
 ## Next step
 
-Phase 3 — ERD review (`docs/erd.md`, incl. multi-tenancy design) — only when you ask.
+Phase 4 — Prisma schema + migration + seed (wired into Docker startup) — only when you ask.
 
 ## Notes for next session (to save context)
 

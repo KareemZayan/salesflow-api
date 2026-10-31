@@ -17,5 +17,13 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*", "test/**/*", "vitest.config.mts", "vitest.e2e.config.mts"]
+  "include": [
+    "src/**/*",
+    "test/**/*",
+    "prisma/**/*.ts",
+    "prisma.config.ts",
+    "vitest.config.mts",
+    "vitest.e2e.config.mts",
+    "vitest.integration.config.mts"
+  ]
 }

@@ -8,9 +8,9 @@ export const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   // Comma-separated list of allowed origins.
   CORS_ORIGINS: z.string().default(''),
-  // Endpoints probed by /health/ready (TCP level until Prisma/BullMQ clients exist).
-  POSTGRES_HOST: z.string().default('localhost'),
-  POSTGRES_PORT: z.coerce.number().int().positive().default(5432),
+  // Prisma connection string. In Docker it is derived from the POSTGRES_* variables (see docker-compose.yml).
+  DATABASE_URL: z.string().min(1),
+  // Endpoint probed by /health/ready (TCP level until the BullMQ client exists in Phase 12).
   REDIS_HOST: z.string().default('localhost'),
   REDIS_PORT: z.coerce.number().int().positive().default(6379),
 });

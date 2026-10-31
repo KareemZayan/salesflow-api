@@ -24,8 +24,10 @@ CMD ["pnpm", "start:dev"]
 
 # ---- build: compile TypeScript ----
 FROM deps AS build
-COPY nest-cli.json tsconfig.json tsconfig.build.json ./
+COPY nest-cli.json tsconfig.json tsconfig.build.json prisma.config.ts ./
+COPY prisma ./prisma
 COPY src ./src
+# `pnpm build` runs `prisma generate` first (the client is gitignored).
 RUN pnpm build
 
 # ---- prod-deps: production dependencies only ----
@@ -38,7 +40,10 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
-COPY --chown=node:node package.json ./
+COPY --chown=node:node package.json prisma.config.ts ./
+# Migrations and the seed run from this image (docker/entrypoint.sh); the seed imports the generated client.
+COPY --chown=node:node prisma ./prisma
+COPY --from=build --chown=node:node /app/src/generated ./src/generated
 COPY --chown=node:node docker/entrypoint.sh ./docker/entrypoint.sh
 RUN chmod +x ./docker/entrypoint.sh
 USER node

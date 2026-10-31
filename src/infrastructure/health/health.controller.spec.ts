@@ -1,21 +1,25 @@
 import { ConfigService } from '@nestjs/config';
-import { HealthCheckService } from '@nestjs/terminus';
+import { HealthCheckService, PrismaHealthIndicator } from '@nestjs/terminus';
 import { HealthController } from './health.controller';
 import { TcpHealthIndicator } from './indicators/tcp-health.indicator';
+import { PrismaService } from '../prisma/prisma.service';
 
 describe('HealthController', () => {
-  const postgres = { host: 'db', port: 5432 };
   const redis = { host: 'cache', port: 6379 };
+  const prisma = {} as PrismaService;
   const tcp = { check: vi.fn().mockResolvedValue({}) };
+  const prismaHealth = { pingCheck: vi.fn().mockResolvedValue({}) };
   const health = {
     check: vi.fn(async (indicators: Array<() => Promise<unknown>>) => {
       await Promise.all(indicators.map((run) => run()));
       return { status: 'ok' };
     }),
   };
-  const config = { getOrThrow: () => ({ postgres, redis }) };
+  const config = { getOrThrow: () => ({ redis }) };
   const controller = new HealthController(
     health as unknown as HealthCheckService,
+    prismaHealth as unknown as PrismaHealthIndicator,
+    prisma,
     tcp as unknown as TcpHealthIndicator,
     config as unknown as ConfigService,
   );
@@ -26,11 +30,12 @@ describe('HealthController', () => {
     await controller.live();
     expect(health.check).toHaveBeenCalledWith([]);
     expect(tcp.check).not.toHaveBeenCalled();
+    expect(prismaHealth.pingCheck).not.toHaveBeenCalled();
   });
 
-  it('readiness probes postgres and redis with configured endpoints', async () => {
+  it('readiness pings postgres through Prisma and probes redis over TCP', async () => {
     await controller.ready();
-    expect(tcp.check).toHaveBeenCalledWith('postgres', postgres);
+    expect(prismaHealth.pingCheck).toHaveBeenCalledWith('postgres', prisma, expect.any(Object));
     expect(tcp.check).toHaveBeenCalledWith('redis', redis);
   });
 });

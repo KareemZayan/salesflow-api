@@ -1,0 +1,549 @@
+// SalesFlow CRM schema — mirrors docs/erd.md (approved in Phase 3).
+//
+// Conventions
+// - Every tenant table has `organizationId` and `@@unique([id, organizationId])`.
+// - Every FK to a tenant table is composite `(xxxId, organizationId)`, so PostgreSQL itself
+//   rejects cross-organization links. Nullable links skip the check (MATCH SIMPLE).
+// - onDelete is `Restrict` unless the child has no meaning without its parent (see ERD section 4).
+//   `SetNull` is never used: it would also try to null the required `organizationId`.
+// - Partial indexes Prisma cannot express live as raw SQL in the init migration.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  UNQUALIFIED
+  CONVERTED
+}
+
+enum LeadSource {
+  WEBSITE
+  REFERRAL
+  EMAIL_CAMPAIGN
+  SOCIAL_MEDIA
+  EVENT
+  COLD_CALL
+  PARTNER
+  OTHER
+}
+
+enum DealStatus {
+  OPEN
+  WON
+  LOST
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ActivityType {
+  CALL
+  EMAIL
+  MEETING
+  NOTE
+  STAGE_CHANGE
+  SYSTEM
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_DUE_SOON
+  TASK_OVERDUE
+  LEAD_ASSIGNED
+  LEAD_CONVERTED
+  DEAL_STAGE_CHANGED
+  DEAL_WON
+  DEAL_LOST
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  LOGIN
+  LOGOUT
+  PERMISSION_CHANGE
+}
+
+// ---------------------------------------------------------------------------
+// Tenant root and global catalogue
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id              String   @id @default(uuid())
+  name            String
+  slug            String   @unique
+  // ISO-4217; default for deals that omit `currency`. Not a DB enum, so new currencies need no migration.
+  defaultCurrency String   @default("USD") @db.Char(3)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  users            User[]
+  roles            Role[]
+  refreshTokens    RefreshToken[]
+  companies        Company[]
+  contacts         Contact[]
+  leads            Lead[]
+  pipelines        Pipeline[]
+  pipelineStages   PipelineStage[]
+  deals            Deal[]
+  dealStageHistory DealStageHistory[]
+  tasks            Task[]
+  activities       Activity[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+}
+
+// Global catalogue (`leads:read`, ...). Not tenant-owned.
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  description String   @default("")
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+}
+
+// ---------------------------------------------------------------------------
+// Identity and RBAC
+// ---------------------------------------------------------------------------
+
+model Role {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String   @default("")
+  // Default roles (ADMIN, SALES_MANAGER, SALES_REP) cannot be deleted.
+  isSystem       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  permissions  RolePermission[]
+  users        User[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, name])
+}
+
+// Pure join table; the tenant is derived through Role, so there is no organizationId here.
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+model User {
+  id             String    @id @default(uuid())
+  organizationId String
+  roleId         String
+  managerId      String?
+  // Globally unique, stored lowercase: login needs no organization selector.
+  email          String    @unique
+  passwordHash   String
+  firstName      String
+  lastName       String
+  // Users are deactivated, never deleted: that keeps every Restrict FK to User safe.
+  isActive       Boolean   @default(true)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  role         Role         @relation(fields: [roleId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  manager      User?        @relation("UserTeam", fields: [managerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  reports      User[]       @relation("UserTeam")
+
+  refreshTokens  RefreshToken[]
+  ownedCompanies Company[]
+  ownedContacts  Contact[]
+  ownedLeads     Lead[]
+  ownedDeals     Deal[]
+  stageChanges   DealStageHistory[]
+  assignedTasks  Task[]             @relation("TaskAssignee")
+  createdTasks   Task[]             @relation("TaskCreator")
+  activities     Activity[]
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, roleId])
+  @@index([organizationId, managerId])
+}
+
+model RefreshToken {
+  id             String    @id @default(uuid())
+  organizationId String
+  userId         String
+  // SHA-256 of the token; the raw token is never stored.
+  tokenHash      String    @unique
+  // Rotation chain id, used for reuse detection.
+  familyId       String
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user         User         @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// CRM core
+// ---------------------------------------------------------------------------
+
+model Company {
+  id             String    @id @default(uuid())
+  organizationId String
+  ownerId        String
+  name           String
+  domain         String?
+  industry       String?
+  phone          String?
+  address        String?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner        User         @relation(fields: [ownerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  contacts   Contact[]
+  deals      Deal[]
+  tasks      Task[]
+  activities Activity[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, ownerId, createdAt])
+  // Search/sort by name (prefix search; pg_trgm later if needed).
+  @@index([organizationId, name])
+}
+
+model Contact {
+  id             String    @id @default(uuid())
+  organizationId String
+  ownerId        String
+  companyId      String?
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String?
+  jobTitle       String?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner        User         @relation(fields: [ownerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  company      Company?     @relation(fields: [companyId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  deals      Deal[]
+  leads      Lead[]
+  tasks      Task[]
+  activities Activity[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, ownerId, createdAt])
+  @@index([organizationId, companyId])
+  @@index([organizationId, email])
+}
+
+model Lead {
+  id                 String     @id @default(uuid())
+  organizationId     String
+  ownerId            String
+  firstName          String
+  lastName           String
+  email              String?
+  phone              String?
+  // Free text until the lead is converted into a Company.
+  companyName        String?
+  source             LeadSource
+  status             LeadStatus @default(NEW)
+  // 0-100, computed by the scoring Strategy.
+  score              Int        @default(0)
+  notes              String?
+  convertedAt        DateTime?
+  convertedContactId String?
+  convertedDealId    String?
+  deletedAt          DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner            User         @relation(fields: [ownerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  // Many leads may be linked to one existing contact; a deal is created by at most one lead.
+  convertedContact Contact?     @relation(fields: [convertedContactId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  convertedDeal    Deal?        @relation("LeadConvertedDeal", fields: [convertedDealId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  tasks      Task[]
+  activities Activity[]
+
+  @@unique([id, organizationId])
+  @@unique([convertedDealId, organizationId])
+  // Main list: "my leads" filtered by status, newest first.
+  @@index([organizationId, ownerId, status, createdAt])
+  @@index([organizationId, source])
+  @@index([organizationId, status, convertedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Pipelines and deals
+// ---------------------------------------------------------------------------
+
+model Pipeline {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  // One default per organization: enforced by a partial unique index in the init migration.
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  stages       PipelineStage[]
+  deals        Deal[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, name])
+}
+
+model PipelineStage {
+  id             String   @id @default(uuid())
+  organizationId String
+  pipelineId     String
+  name           String
+  // Not unique per pipeline: reordering would hit transient duplicates. The service reorders in one transaction.
+  position       Int
+  // 0-100 win percentage.
+  probability    Int      @default(0)
+  isWon          Boolean  @default(false)
+  isLost         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  pipeline     Pipeline     @relation(fields: [pipelineId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  deals       Deal[]
+  historyFrom DealStageHistory[] @relation("HistoryFromStage")
+  historyTo   DealStageHistory[] @relation("HistoryToStage")
+
+  @@unique([id, organizationId])
+  @@unique([pipelineId, name])
+  @@index([pipelineId, position])
+}
+
+model Deal {
+  id                String     @id @default(uuid())
+  organizationId    String
+  ownerId           String
+  pipelineId        String
+  stageId           String
+  contactId         String?
+  companyId         String?
+  title             String
+  amount            Decimal    @default(0) @db.Decimal(14, 2)
+  currency          String     @db.Char(3)
+  expectedCloseDate DateTime?  @db.Date
+  // Business outcome; a deal in a terminal stage must carry the matching status (enforced by the service).
+  status            DealStatus @default(OPEN)
+  lostReason        String?
+  closedAt          DateTime?
+  deletedAt         DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner        User          @relation(fields: [ownerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  pipeline     Pipeline      @relation(fields: [pipelineId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  stage        PipelineStage @relation(fields: [stageId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  contact      Contact?      @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  company      Company?      @relation(fields: [companyId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  convertedFromLead Lead?              @relation("LeadConvertedDeal")
+  stageHistory      DealStageHistory[]
+  tasks             Task[]
+  activities        Activity[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, ownerId, status, expectedCloseDate])
+  // Kanban board and pipeline summary.
+  @@index([organizationId, pipelineId, stageId, status])
+  // Reports: win rate and revenue by period.
+  @@index([organizationId, status, closedAt])
+}
+
+// Append-only, so no updatedAt.
+model DealStageHistory {
+  id             String   @id @default(uuid())
+  organizationId String
+  dealId         String
+  // Null for the initial placement of a new deal.
+  fromStageId    String?
+  toStageId      String
+  changedById    String
+  changedAt      DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  deal         Deal           @relation(fields: [dealId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  fromStage    PipelineStage? @relation("HistoryFromStage", fields: [fromStageId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  toStage      PipelineStage  @relation("HistoryToStage", fields: [toStageId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  changedBy    User           @relation(fields: [changedById, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([dealId, changedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Tasks, activities, notifications, audit
+// ---------------------------------------------------------------------------
+
+model Task {
+  id             String       @id @default(uuid())
+  organizationId String
+  assigneeId     String
+  createdById    String
+  title          String
+  description    String?
+  dueDate        DateTime?
+  priority       TaskPriority @default(MEDIUM)
+  // Overdue is computed from dueDate, not stored.
+  status         TaskStatus   @default(OPEN)
+  completedAt    DateTime?
+  reminderAt     DateTime?
+  // Idempotency marker for the reminder job.
+  reminderSentAt DateTime?
+  leadId         String?
+  dealId         String?
+  contactId      String?
+  companyId      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assignee     User         @relation("TaskAssignee", fields: [assigneeId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  createdBy    User         @relation("TaskCreator", fields: [createdById, organizationId], references: [id, organizationId], onDelete: Restrict)
+  lead         Lead?        @relation(fields: [leadId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  deal         Deal?        @relation(fields: [dealId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  contact      Contact?     @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  company      Company?     @relation(fields: [companyId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  // Raw SQL in the init migration adds a partial index on (status, dueDate) for open tasks
+  // (cross-org overdue-checker job).
+
+  @@unique([id, organizationId])
+  // "My open tasks by due date" and per-org overdue detection.
+  @@index([organizationId, assigneeId, status, dueDate])
+  @@index([organizationId, dealId])
+  @@index([organizationId, leadId])
+  @@index([organizationId, contactId])
+  @@index([organizationId, companyId])
+}
+
+model Activity {
+  id             String       @id @default(uuid())
+  organizationId String
+  // Null = created by the system.
+  actorId        String?
+  type           ActivityType
+  subject        String
+  body           String?
+  metadata       Json?
+  occurredAt     DateTime     @default(now())
+  leadId         String?
+  dealId         String?
+  contactId      String?
+  companyId      String?
+  createdAt      DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actor        User?        @relation(fields: [actorId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  lead         Lead?        @relation(fields: [leadId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  deal         Deal?        @relation(fields: [dealId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  contact      Contact?     @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  company      Company?     @relation(fields: [companyId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  // Cursor-paginated timeline per entity (id is the tie-breaker).
+  @@index([organizationId, dealId, occurredAt(sort: Desc), id])
+  @@index([organizationId, leadId, occurredAt(sort: Desc), id])
+  @@index([organizationId, contactId, occurredAt(sort: Desc), id])
+  @@index([organizationId, companyId, occurredAt(sort: Desc), id])
+}
+
+model Notification {
+  id             String           @id @default(uuid())
+  organizationId String
+  userId         String
+  type           NotificationType
+  title          String
+  body           String?
+  payload        Json?
+  readAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user         User         @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([id, organizationId])
+  // Unread inbox and unread count.
+  @@index([userId, readAt, createdAt(sort: Desc)])
+}
+
+// The only polymorphic table: `entityId` has no FK so the log outlives the entity it describes.
+model AuditLog {
+  id             String      @id @default(uuid())
+  organizationId String
+  // Null = performed by the system.
+  actorId        String?
+  action         AuditAction
+  entityType     String
+  entityId       String
+  before         Json?
+  after          Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actor        User?        @relation(fields: [actorId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([id, organizationId])
+  @@index([organizationId, entityType, entityId, createdAt(sort: Desc)])
+  @@index([organizationId, actorId, createdAt(sort: Desc)])
+}

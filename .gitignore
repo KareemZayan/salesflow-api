@@ -70,3 +70,6 @@ temp/
 .cache/
 .eslintcache
 *.local
+
+# Generated Prisma client (rebuilt by `pnpm prisma:generate`)
+src/generated/

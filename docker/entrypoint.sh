@@ -17,11 +17,11 @@ until node -e "require('net').connect({host:process.argv[1],port:+process.argv[2
   sleep 2
 done
 
-# Phase 4 enables these once Prisma exists:
-# echo "[entrypoint] Running migrations..."
-# pnpm prisma migrate deploy
-# echo "[entrypoint] Seeding (idempotent)..."
-# pnpm db:seed
+# Binaries are called from node_modules directly: the runtime image has no pnpm.
+echo "[entrypoint] Running migrations..."
+./node_modules/.bin/prisma migrate deploy
+echo "[entrypoint] Seeding (idempotent)..."
+./node_modules/.bin/tsx prisma/seed/index.ts
 
 echo "[entrypoint] Starting: $*"
 exec "$@"

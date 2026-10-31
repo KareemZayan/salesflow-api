@@ -4,6 +4,7 @@ import { appConfig } from './config/app.config';
 import { validateEnv } from './config/validate-env';
 import { HealthModule } from './infrastructure/health/health.module';
 import { LoggerModule } from './infrastructure/logger/logger.module';
+import { PrismaModule } from './infrastructure/prisma/prisma.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { LoggerModule } from './infrastructure/logger/logger.module';
       validate: validateEnv,
     }),
     LoggerModule,
+    PrismaModule,
     HealthModule,
   ],
 })

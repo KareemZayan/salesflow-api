@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 4 — Prisma schema + migration + seed — done, awaiting your review/commit
+Phase 5 — Common layer — done, awaiting your review/commit
 
 ## Completed phases
 
@@ -11,6 +11,7 @@ Phase 4 — Prisma schema + migration + seed — done, awaiting your review/comm
 - Quality gates (Husky / lint-staged / commitlint) ✅ (2026-10-30)
 - Phase 3 — ERD review ✅ (2026-10-31)
 - Phase 4 — Prisma schema, init migration, idempotent seed, Docker startup ✅ (2026-10-31)
+- Phase 5 — Common layer (filter, pagination, decorators, tenant context, Prisma scoping extension) ✅ (2026-10-31)
 
 ## Decisions log
 
@@ -46,7 +47,7 @@ Phase 4 — Prisma schema + migration + seed — done, awaiting your review/comm
 
 ## Next step
 
-Phase 5 — Common layer (exception filter, pagination, tenant context and the Prisma scoping extension) — only when you ask.
+Phase 6 — Organizations + Auth + Users + RBAC (JwtAuthGuard calls `TenantContextService.setUser`; login/refresh use `PrismaService`) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -62,3 +63,8 @@ Phase 5 — Common layer (exception filter, pagination, tenant context and the P
 - Do not run `docker compose -f docker-compose.yml ...` while using the dev stack: it recreates `postgres` without the published port. Fix with `docker compose up -d postgres`.
 - Another project's Postgres/Redis (eltamam) runs on this machine (Redis on 6379), so Redis health can look "up" for the wrong reason.
 - Skeleton folders: `src/infrastructure/prisma` now has real files (its `.gitkeep` was removed).
+- Common layer: `src/common/` (`common.module.ts` is global: ClsModule, TenantContextService, APP_FILTER). Repositories inject `@Inject(PRISMA_TENANT) prisma: TenantPrismaClient`; never `PrismaService` outside the allowed folders (ESLint).
+- Lists: extend `PaginationQueryDto`, use `toSkipTake`, `toOrderBy(query, allowedFields, fallback)`, `buildPaginated`; cursor lists use `CursorQueryDto` + `buildCursorPage`. Business errors extend `DomainException(code, message, status)`.
+- Decorators exist (`@Public`, `@Roles`, `@Permissions`, `@CurrentUser`) but the guards that read them are Phase 6. `@Audit()` is Phase 13.
+- Integration tests (`pnpm test:integration`) cover the scoping extension against real Postgres; use the same pattern for module isolation tests.
+- Soft-deletable relations in `include` are not auto-filtered (ADR 0002 known limits).

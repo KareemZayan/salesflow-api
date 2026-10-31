@@ -4,4 +4,5 @@ export interface AuthenticatedUser {
   organizationId: string;
   role: string;
   permissions: string[];
+  mustChangePassword: boolean;
 }

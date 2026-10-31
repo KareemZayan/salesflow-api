@@ -100,6 +100,8 @@ export async function seedOrganization(
             passwordHash: passwordHash as string,
             firstName: 'Admin',
             lastName: 'User',
+            // The operator chose this password in the environment; no forced change.
+            mustChangePassword: false,
           },
         })
       ).id;

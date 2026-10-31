@@ -106,6 +106,7 @@ erDiagram
         string firstName
         string lastName
         boolean isActive
+        boolean mustChangePassword "set by admin create/reset, cleared by change-password"
         datetime lastLoginAt
         datetime createdAt
         datetime updatedAt

@@ -21,6 +21,17 @@ describe('Health (e2e)', () => {
     expect(res.body.status).toBe('ok');
   });
 
+  it('works without a token, even next to a garbage Authorization header (public + unthrottled)', async () => {
+    await request(app.getHttpServer()).get('/health').expect(200);
+    await request(app.getHttpServer())
+      .get('/health')
+      .set('Authorization', 'Bearer not-a-token')
+      .expect(200);
+    // Readiness reports failing dependencies (503), it is never answered with 401.
+    const ready = await request(app.getHttpServer()).get('/health/ready');
+    expect(ready.status).toBe(503);
+  });
+
   it('GET /api/v1/health is not routed (health stays outside the prefix)', async () => {
     await request(app.getHttpServer()).get('/api/v1/health').expect(404);
   });

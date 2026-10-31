@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 5 — Common layer — done, awaiting your review/commit
+Phase 6a — Auth core — done, awaiting your review/commit (Phase 6 is split: 6a Auth core, 6b Users, 6c Roles + visibility, 6d Organizations)
 
 ## Completed phases
 
@@ -12,6 +12,7 @@ Phase 5 — Common layer — done, awaiting your review/commit
 - Phase 3 — ERD review ✅ (2026-10-31)
 - Phase 4 — Prisma schema, init migration, idempotent seed, Docker startup ✅ (2026-10-31)
 - Phase 5 — Common layer (filter, pagination, decorators, tenant context, Prisma scoping extension) ✅ (2026-10-31)
+- Phase 6a — Auth core (login/refresh/logout/me/change-password, JWT strategy, global guards, throttling, helmet, mustChangePassword migration) ✅ (2026-10-31)
 
 ## Decisions log
 
@@ -41,13 +42,23 @@ Phase 5 — Common layer — done, awaiting your review/commit
 - 2026-10-31 — PrismaService connects lazily (no `$connect` on init); `/health/ready` uses Terminus `PrismaHealthIndicator`. Redis is still a TCP probe until Phase 12
 - 2026-10-31 — Integration tests: `pnpm test:integration` (`vitest.integration.config.mts`) needs the compose `postgres`; the global setup creates and migrates `TEST_DATABASE_URL`, and both setup and suite refuse any DB whose name does not end with `_test`
 
+- 2026-10-31 — Phase 6 split into 6a Auth core, 6b Users, 6c Roles + visibility (OwnershipScopeService), 6d Organizations; one branch/PR each. 6a branch: `feat/phase-6a-auth-core`
+- 2026-10-31 — Auth design in ADR 0003: access JWT (HS256, pinned alg, iss/aud, claims sub+org only, user/role/permissions/org status reloaded in ONE query per request), opaque refresh tokens (SHA-256 stored, rotation per family, atomic via conditional updateMany), refresh token in the JSON body (revisit httpOnly cookie when a frontend exists)
+- 2026-10-31 — TOKEN_ROTATED_RECENTLY is **409** (not 401) so clients do not log out; only while the family still has a live token (else 401 INVALID_REFRESH_TOKEN). Replay after REFRESH_REUSE_GRACE_SECONDS (10) = 401 TOKEN_REUSED + family revoked
+- 2026-10-31 — Added `User.mustChangePassword` (migration `add_user_must_change_password`, ERD + seed updated; seeded admin = false). Locked routes answer 403 PASSWORD_CHANGE_REQUIRED except `me`/`change-password` (`@AllowWhenPasswordChangeRequired()`)
+- 2026-10-31 — `@nestjs/jwt` and `@nestjs/passport` pinned to ^11: v12 is ESM-only (same reason as Nest 12 / terminus)
+- 2026-10-31 — Env: removed JWT_REFRESH_SECRET; added TRUST_PROXY, REFRESH_REUSE_GRACE_SECONDS; reused existing THROTTLE_* vars. Local `.env` got a generated JWT_ACCESS_SECRET (min 32 chars now enforced)
+- 2026-10-31 — Throttling: two named throttlers, `default` and `auth` (`@AuthThrottle()`; tracker = IP + normalized email); in-memory storage (per instance, resets on restart) — move to Redis before scaling out. Auth 429 sends `Retry-After-auth` (named-throttler header suffix)
+- 2026-10-31 — e2e now needs real Postgres (`pnpm test:e2e`, shares the integration global setup, runs files serially); `pnpm test` stays DB-free. Suites needing data use `createTestApp()` (switches DATABASE_URL to the _test DB); default e2e env keeps an unreachable DB and sky-high throttle limits
+- 2026-10-31 — helmet enabled (CSP relaxed for the Swagger path only, dev-only); health endpoints are `@Public()` + `@SkipThrottle`
+
 ## Open questions
 
 - None.
 
 ## Next step
 
-Phase 6 — Organizations + Auth + Users + RBAC (JwtAuthGuard calls `TenantContextService.setUser`; login/refresh use `PrismaService`) — only when you ask.
+Phase 6b — Users (admin CRUD, deactivate, manager assignment, admin reset-password that sets mustChangePassword + revokes tokens, last-active-ADMIN protection in a transaction, no self-deactivation / self role change) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -65,6 +76,10 @@ Phase 6 — Organizations + Auth + Users + RBAC (JwtAuthGuard calls `TenantConte
 - Skeleton folders: `src/infrastructure/prisma` now has real files (its `.gitkeep` was removed).
 - Common layer: `src/common/` (`common.module.ts` is global: ClsModule, TenantContextService, APP_FILTER). Repositories inject `@Inject(PRISMA_TENANT) prisma: TenantPrismaClient`; never `PrismaService` outside the allowed folders (ESLint).
 - Lists: extend `PaginationQueryDto`, use `toSkipTake`, `toOrderBy(query, allowedFields, fallback)`, `buildPaginated`; cursor lists use `CursorQueryDto` + `buildCursorPage`. Business errors extend `DomainException(code, message, status)`.
-- Decorators exist (`@Public`, `@Roles`, `@Permissions`, `@CurrentUser`) but the guards that read them are Phase 6. `@Audit()` is Phase 13.
+- Auth: `modules/auth` (AuthRepository uses the unscoped PrismaService on purpose). Guards live in `common/guards` and are registered in order in `CommonModule` (Throttler → JwtAuth → PasswordChangeRequired → Roles → Permissions). `@Public`, `@Roles` (any-of), `@Permissions` (all-of), `@AuthThrottle`, `@AllowWhenPasswordChangeRequired` exist. `@Audit()` is Phase 13. `PasswordService` is exported by AuthModule for the Users module (6b).
+- E2E helpers: `test/factories` (resetDatabase, createOrganization via the real seedOrganization, createUser), `test/setup/create-test-app.ts`, `test/support/probe.controller.ts` (test-only @Roles/@Permissions routes).
+- 6c TODO: OwnershipScopeService in an exported `common/visibility` module (rep = own, manager = own + direct reports via managerId, admin = all; load report ids once per request, cache in CLS). 6b/6c need their own tenant-isolation tests.
+- Phase 12 TODO: scheduled cleanup job for expired/revoked RefreshToken rows (they accumulate until then).
+- Git: working-tree files are LF (prettier) while git normalizes to CRLF on commit; `git status` shows many "M" files with no content diff. `pnpm-lock.yaml` was rewritten by pnpm 11.28 (large diff) — check it before committing.
 - Integration tests (`pnpm test:integration`) cover the scoping extension against real Postgres; use the same pattern for module isolation tests.
 - Soft-deletable relations in `include` are not auto-filtered (ADR 0002 known limits).

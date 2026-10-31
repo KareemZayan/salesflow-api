@@ -342,7 +342,7 @@ Result: the database itself rejects a deal in org A pointing at a contact in org
 
 Cost: more verbose Prisma relations and one extra unique index per table. Service-level validation is still needed to return a clean 404/400 instead of a raw FK error.
 
-### 5.3 Centralized scoping: Prisma client extension (to be finalized in Phase 5)
+### 5.3 Centralized scoping: Prisma client extension (implemented in Phase 5, see ADR 0002)
 
 A single `$extends({ query: { $allModels: { $allOperations } } })` on the tenant models:
 
@@ -355,12 +355,13 @@ Known limits, handled in Phase 5: nested writes need the same injection, raw SQL
 
 ### 5.4 Tables without automatic scoping
 
-| Table                  | Why                                                                                                             |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `Organization`         | It is the tenant root                                                                                           |
-| `Permission`           | Global catalogue (`leads:read`, ...)                                                                            |
-| `RolePermission`       | Pure join; tenant is derived through `Role`, so it has no `organizationId`                                      |
-| `User`, `RefreshToken` | Have `organizationId`, but login/refresh run before the tenant is known, so those lookups use the unscoped path |
+| Table            | Why                                                                        |
+| ---------------- | -------------------------------------------------------------------------- |
+| `Organization`   | It is the tenant root                                                      |
+| `Permission`     | Global catalogue (`leads:read`, ...)                                       |
+| `RolePermission` | Pure join; tenant is derived through `Role`, so it has no `organizationId` |
+
+`User` and `RefreshToken` are **not** in this list: the extension scopes them too (revised in Phase 5, ADR 0002). Only login/refresh, which run before a tenant exists, use the unscoped client.
 
 ### 5.5 Uniqueness
 

@@ -39,7 +39,8 @@ describe('Health (e2e)', () => {
   it('GET /health/ready returns 503 when dependencies are unreachable', async () => {
     // Test env points at ports nothing listens on, so readiness must fail loudly.
     const res = await request(app.getHttpServer()).get('/health/ready').expect(503);
-    expect(res.body.status).toBe('error');
-    expect(res.body.error).toHaveProperty('postgres');
+    // Probe diagnostics travel in `details` of the standard error body.
+    expect(res.body).toMatchObject({ statusCode: 503, code: 'SERVICE_UNAVAILABLE' });
+    expect(res.body.details).toHaveProperty('postgres');
   });
 });

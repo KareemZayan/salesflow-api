@@ -6,6 +6,8 @@ import {
   HealthCheckService,
   PrismaHealthIndicator,
 } from '@nestjs/terminus';
+import { SkipThrottle } from '@nestjs/throttler';
+import { Public } from '../../common/decorators/public.decorator';
 import { APP_CONFIG_KEY, AppConfig } from '../../config/app.config';
 import { PrismaService } from '../prisma/prisma.service';
 import { TcpHealthIndicator } from './indicators/tcp-health.indicator';
@@ -16,6 +18,9 @@ export const READINESS_ROUTE = `${HEALTH_ROUTE}/ready`;
 
 const DB_CHECK_TIMEOUT_MS = 2000;
 
+// Probes carry no token and run often, so they bypass both authentication and rate limiting.
+@Public()
+@SkipThrottle({ default: true, auth: true })
 @Controller(HEALTH_ROUTE)
 export class HealthController {
   constructor(

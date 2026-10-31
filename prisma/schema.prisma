@@ -166,20 +166,22 @@ model RolePermission {
 }
 
 model User {
-  id             String    @id @default(uuid())
-  organizationId String
-  roleId         String
-  managerId      String?
+  id                 String    @id @default(uuid())
+  organizationId     String
+  roleId             String
+  managerId          String?
   // Globally unique, stored lowercase: login needs no organization selector.
-  email          String    @unique
-  passwordHash   String
-  firstName      String
-  lastName       String
+  email              String    @unique
+  passwordHash       String
+  firstName          String
+  lastName           String
   // Users are deactivated, never deleted: that keeps every Restrict FK to User safe.
-  isActive       Boolean   @default(true)
-  lastLoginAt    DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  isActive           Boolean   @default(true)
+  // Set when an admin creates the account or resets the password; cleared by change-password.
+  mustChangePassword Boolean   @default(false)
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   role         Role         @relation(fields: [roleId, organizationId], references: [id, organizationId], onDelete: Restrict)

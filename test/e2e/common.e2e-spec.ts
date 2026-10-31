@@ -37,4 +37,33 @@ describe('Common layer (e2e)', () => {
     const res = await request(app.getHttpServer()).get(`/${SWAGGER_PATH}-json`).expect(200);
     expect(res.body.info.title).toBe('SalesFlow CRM API');
   });
+
+  it('sets helmet security headers, with a strict CSP outside the docs', async () => {
+    const res = await request(app.getHttpServer()).get('/health').expect(200);
+
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['content-security-policy']).toContain("default-src 'self'");
+    expect(res.headers['x-powered-by']).toBeUndefined();
+  });
+
+  it('relaxes the CSP for the Swagger docs path only', async () => {
+    const docs = await request(app.getHttpServer()).get(`/${SWAGGER_PATH}-json`).expect(200);
+
+    expect(docs.headers['content-security-policy']).toBeUndefined();
+    expect(docs.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('documents the auth routes in the OpenAPI spec', async () => {
+    const res = await request(app.getHttpServer()).get(`/${SWAGGER_PATH}-json`).expect(200);
+
+    expect(Object.keys(res.body.paths)).toEqual(
+      expect.arrayContaining([
+        '/api/v1/auth/login',
+        '/api/v1/auth/refresh',
+        '/api/v1/auth/logout',
+        '/api/v1/auth/me',
+        '/api/v1/auth/change-password',
+      ]),
+    );
+  });
 });

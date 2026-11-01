@@ -1,6 +1,6 @@
 import * as argon2 from 'argon2';
 import type { PrismaClient } from '../../prisma/seed/prisma-client';
-import { ROLE_NAMES, type RoleName } from '../../prisma/seed/permissions';
+import { ROLE_NAMES } from '../../prisma/seed/permissions';
 import { seedOrganization } from '../../prisma/seed/seed-organization';
 
 export const TEST_PASSWORD = 'correct-horse-battery';
@@ -37,7 +37,7 @@ export async function createOrganization(
 }
 
 export interface UserOptions {
-  role?: RoleName;
+  role?: string;
   email?: string;
   managerId?: string;
   isActive?: boolean;
@@ -74,4 +74,22 @@ export async function createUser(
     },
   });
   return { id: user.id, email, password: TEST_PASSWORD };
+}
+
+// A non-default role, e.g. a "support" role that may edit users but is not an ADMIN.
+export async function createCustomRole(
+  prisma: PrismaClient,
+  organization: Pick<TestOrganization, 'id'>,
+  name: string,
+  permissionKeys: string[],
+): Promise<{ id: string; name: string }> {
+  const permissions = await prisma.permission.findMany({ where: { key: { in: permissionKeys } } });
+  return prisma.role.create({
+    data: {
+      organizationId: organization.id,
+      name,
+      permissions: { create: permissions.map(({ id }) => ({ permissionId: id })) },
+    },
+    select: { id: true, name: true },
+  });
 }

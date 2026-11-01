@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { SessionRevoker } from './session-revoker.service';
 
 // The unscoped client is deliberate here (see ESLint UNSCOPED_ALLOWED): login and refresh run
 // before any tenant exists, so there is no organization to scope by. Every query below is keyed by
@@ -59,7 +60,10 @@ export type NewRefreshTokenData = Pick<
 
 @Injectable()
 export class AuthRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sessions: SessionRevoker,
+  ) {}
 
   // One query for everything a request needs: user, role, permissions and organization status.
   findAuthContext(userId: string): Promise<AuthContextRecord | null> {
@@ -134,16 +138,13 @@ export class AuthRepository {
     successor: NewRefreshTokenData,
     now: Date,
   ): Promise<void> {
-    await this.prisma.$transaction([
-      this.prisma.user.update({
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
         where: { id: userId },
         data: { passwordHash, mustChangePassword: false },
-      }),
-      this.prisma.refreshToken.updateMany({
-        where: { userId, revokedAt: null },
-        data: { revokedAt: now },
-      }),
-      this.prisma.refreshToken.create({ data: successor }),
-    ]);
+      });
+      await this.sessions.revokeAllForUser(tx, userId, now);
+      await tx.refreshToken.create({ data: successor });
+    });
   }
 }

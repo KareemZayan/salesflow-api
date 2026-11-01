@@ -6,6 +6,23 @@ import { APP_CONFIG_KEY, AppConfig } from '../../config/app.config';
 
 export const REQUEST_ID_HEADER = 'x-request-id';
 
+// pino-http does not log bodies today; the body and top-level paths are a safety net for the day
+// someone adds `req.body` to the serializer or logs a DTO.
+const SECRET_FIELDS = [
+  'password',
+  'temporaryPassword',
+  'newPassword',
+  'currentPassword',
+  'passwordHash',
+  'refreshToken',
+];
+export const LOG_REDACT_PATHS = [
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'res.headers["set-cookie"]',
+  ...SECRET_FIELDS.flatMap((field) => [field, `*.${field}`, `req.body.${field}`]),
+];
+
 @Module({
   imports: [
     PinoLoggerModule.forRootAsync({
@@ -23,7 +40,7 @@ export const REQUEST_ID_HEADER = 'x-request-id';
               return id;
             },
             redact: {
-              paths: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'],
+              paths: LOG_REDACT_PATHS,
               censor: '[REDACTED]',
             },
             // Pretty output only in dev; production stays structured JSON.

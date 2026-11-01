@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 6a — Auth core — done, awaiting your review/commit (Phase 6 is split: 6a Auth core, 6b Users, 6c Roles + visibility, 6d Organizations)
+Phase 6b — Users — done, awaiting your review/commit (Phase 6 is split: 6a Auth core ✅, 6b Users, 6c Roles + visibility, 6d Organizations)
 
 ## Completed phases
 
@@ -13,6 +13,7 @@ Phase 6a — Auth core — done, awaiting your review/commit (Phase 6 is split: 
 - Phase 4 — Prisma schema, init migration, idempotent seed, Docker startup ✅ (2026-10-31)
 - Phase 5 — Common layer (filter, pagination, decorators, tenant context, Prisma scoping extension) ✅ (2026-10-31)
 - Phase 6a — Auth core (login/refresh/logout/me/change-password, JWT strategy, global guards, throttling, helmet, mustChangePassword migration) ✅ (2026-10-31)
+- Phase 6b — Users (admin CRUD, deactivate/reactivate, manager assignment, admin reset-password, org advisory lock, SessionRevoker) ✅ (2026-10-31)
 
 ## Decisions log
 
@@ -52,13 +53,17 @@ Phase 6a — Auth core — done, awaiting your review/commit (Phase 6 is split: 
 - 2026-10-31 — e2e now needs real Postgres (`pnpm test:e2e`, shares the integration global setup, runs files serially); `pnpm test` stays DB-free. Suites needing data use `createTestApp()` (switches DATABASE_URL to the _test DB); default e2e env keeps an unreachable DB and sky-high throttle limits
 - 2026-10-31 — helmet enabled (CSP relaxed for the Swagger path only, dev-only); health endpoints are `@Public()` + `@SkipThrottle`
 
+- 2026-10-31 — 6b design in ADR 0004: one advisory lock per org (`acquireOrgLock`, infrastructure/prisma/org-lock.ts, the only raw SQL) around every write to isActive/roleId/managerId, checks inside the tx; only an ADMIN may touch an ADMIN account or assign the ADMIN role (ADMIN_REQUIRED); no self-deactivate / self role change / admin self-reset; INVALID_MANAGER on inactive manager at reactivation; USER_HAS_ACTIVE_REPORTS blocks deactivation; email clash decided by the unique index (P2002 → EMAIL_ALREADY_EXISTS), no pre-check because the scoped client cannot see other orgs
+- 2026-10-31 — `SessionRevoker` (exported by AuthModule, takes a tx client) is the single "revoke all refresh tokens of a user"; AuthRepository.replacePassword now uses it. SALES_MANAGER has users:read, so managers see ALL org users read-only
+- 2026-10-31 — pino redact paths extracted to `LOG_REDACT_PATHS` (password, temporaryPassword, newPassword, currentPassword, passwordHash, refreshToken + authorization/cookie) with a spec
+
 ## Open questions
 
 - None.
 
 ## Next step
 
-Phase 6b — Users (admin CRUD, deactivate, manager assignment, admin reset-password that sets mustChangePassword + revokes tokens, last-active-ADMIN protection in a transaction, no self-deactivation / self role change) — only when you ask.
+Phase 6c — Roles + visibility (OwnershipScopeService, roles/permissions endpoints; reuse acquireOrgLock) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -78,6 +83,7 @@ Phase 6b — Users (admin CRUD, deactivate, manager assignment, admin reset-pass
 - Lists: extend `PaginationQueryDto`, use `toSkipTake`, `toOrderBy(query, allowedFields, fallback)`, `buildPaginated`; cursor lists use `CursorQueryDto` + `buildCursorPage`. Business errors extend `DomainException(code, message, status)`.
 - Auth: `modules/auth` (AuthRepository uses the unscoped PrismaService on purpose). Guards live in `common/guards` and are registered in order in `CommonModule` (Throttler → JwtAuth → PasswordChangeRequired → Roles → Permissions). `@Public`, `@Roles` (any-of), `@Permissions` (all-of), `@AuthThrottle`, `@AllowWhenPasswordChangeRequired` exist. `@Audit()` is Phase 13. `PasswordService` is exported by AuthModule for the Users module (6b).
 - E2E helpers: `test/factories` (resetDatabase, createOrganization via the real seedOrganization, createUser), `test/setup/create-test-app.ts`, `test/support/probe.controller.ts` (test-only @Roles/@Permissions routes).
+- Phase 13 TODO: audit-log user.deactivated / user.password_reset / user.role_changed (6b only emits structured log events with ids). Last-active-ADMIN is only reachable via a race through the API (self-removal blocked, non-admins cannot touch admins), so it is covered by the concurrent e2e test + unit tests.
 - 6c TODO: OwnershipScopeService in an exported `common/visibility` module (rep = own, manager = own + direct reports via managerId, admin = all; load report ids once per request, cache in CLS). 6b/6c need their own tenant-isolation tests.
 - Phase 12 TODO: scheduled cleanup job for expired/revoked RefreshToken rows (they accumulate until then).
 - Git: working-tree files are LF (prettier) while git normalizes to CRLF on commit; `git status` shows many "M" files with no content diff. `pnpm-lock.yaml` was rewritten by pnpm 11.28 (large diff) — check it before committing.

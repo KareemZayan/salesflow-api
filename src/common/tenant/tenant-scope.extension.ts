@@ -54,3 +54,9 @@ export function createTenantClient(prisma: PrismaClient, scope: TenantScope) {
 }
 
 export type TenantPrismaClient = ReturnType<typeof createTenantClient>;
+
+// What `$transaction(async (tx) => ...)` hands you: the scoped client minus the lifecycle methods.
+export type TenantTransactionClient = Omit<
+  TenantPrismaClient,
+  '$connect' | '$disconnect' | '$on' | '$transaction' | '$extends'
+>;

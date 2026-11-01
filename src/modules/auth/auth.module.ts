@@ -8,6 +8,7 @@ import { AuthController } from './auth.controller';
 import { AuthRepository } from './auth.repository';
 import { AuthService } from './auth.service';
 import { PasswordService } from './password.service';
+import { SessionRevoker } from './session-revoker.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { TokenService } from './token.service';
 
@@ -31,8 +32,15 @@ import { TokenService } from './token.service';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, AuthRepository, TokenService, PasswordService, JwtStrategy],
-  // PasswordService is shared with the Users module (6b) so there is one hashing policy.
-  exports: [PasswordService],
+  providers: [
+    AuthService,
+    AuthRepository,
+    TokenService,
+    PasswordService,
+    SessionRevoker,
+    JwtStrategy,
+  ],
+  // Shared with the Users module: one hashing policy, one way to revoke sessions.
+  exports: [PasswordService, SessionRevoker],
 })
 export class AuthModule {}

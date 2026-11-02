@@ -18,9 +18,18 @@ export const envSchema = z.object({
   TRUST_PROXY: z.string().default('false'),
   // Prisma connection string. In Docker it is derived from the POSTGRES_* variables (see docker-compose.yml).
   DATABASE_URL: z.string().min(1),
-  // Endpoint probed by /health/ready (TCP level until the BullMQ client exists in Phase 12).
+  // Redis backs the BullMQ queues; /health/ready pings it through the queue connection.
   REDIS_HOST: z.string().default('localhost'),
   REDIS_PORT: z.coerce.number().int().positive().default(6379),
+  // Blank = no authentication (the local compose Redis).
+  REDIS_PASSWORD: z.string().default(''),
+  // Key prefix of every queue, so two environments (or e2e runs) can share one Redis safely.
+  QUEUE_PREFIX: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]+$/, 'letters, digits, "-" and "_" only')
+    .default('salesflow'),
+  // false = this process only enqueues (API-only instance); true = it also runs the job workers.
+  QUEUE_WORKERS_ENABLED: z.enum(['true', 'false']).default('true'),
   // Access tokens are HS256 JWTs. Refresh tokens are opaque random values, so they need no secret.
   JWT_ACCESS_SECRET: z.string().min(32, 'must be at least 32 characters'),
   JWT_ACCESS_EXPIRES_IN: duration('15m'),

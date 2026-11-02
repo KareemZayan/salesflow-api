@@ -80,6 +80,12 @@ export class DealsService {
     return toDealResponse(deal);
   }
 
+  // For system consumers (notifications) that react to an event and have no caller to authorize:
+  // the tenant comes from the surrounding tenant context. Null = deleted or never existed.
+  findOwnerId(dealId: string): Promise<string | null> {
+    return this.repository.findOwnerId(dealId);
+  }
+
   // For modules that link their records to a deal (tasks). Nothing blocks deleting a deal, so no lock
   // is needed. Missing, deleted, foreign and not-visible deals all give the same 400.
   async assertLinkable(scope: VisibilityScope, dealId: string): Promise<void> {

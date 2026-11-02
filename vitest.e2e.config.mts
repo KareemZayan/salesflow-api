@@ -21,6 +21,10 @@ export default defineConfig({
       // Suites that need data use createTestApp(), which switches to the _test database.
       DATABASE_URL: 'postgresql://salesflow:unused@localhost:1/salesflow',
       REDIS_PORT: '1',
+      // No workers against the dead port; suites that test the queues opt in through
+      // createTestApp({ queue }), which connects them to the real Redis under a private prefix.
+      QUEUE_WORKERS_ENABLED: 'false',
+      QUEUE_PREFIX: 'salesflow-test-default',
       LOG_LEVEL: 'silent',
       JWT_ACCESS_SECRET: 'e2e-test-secret-e2e-test-secret-0123456789',
       // Effectively off, so only the dedicated throttling suite ever sees a 429.

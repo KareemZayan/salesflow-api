@@ -260,6 +260,7 @@ erDiagram
         string body
         json payload
         datetime readAt
+        string dedupeKey "nullable, unique with organizationId"
         datetime createdAt
     }
     AuditLog {
@@ -393,29 +394,30 @@ No public registration. New organizations are created by an **idempotent CLI scr
 
 Rule: tenant-scoped query patterns **lead with `organizationId`**. Soft-deleted rows are filtered by `deletedAt: null`, so lists that need it include `deletedAt` where it helps.
 
-| Table              | Index                                                                                            | Query it serves                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| every tenant table | `(id, organizationId)` unique                                                                    | Composite FK target (section 5.2)                              |
-| `User`             | `(organizationId, roleId)`, `(organizationId, managerId)`                                        | Team visibility: "users whose manager is X"                    |
-| `RefreshToken`     | `(userId)`, `(expiresAt)`                                                                        | Revoke-all for a user; cleanup of expired tokens               |
-| `Company`          | `(organizationId, ownerId, createdAt)`                                                           | Owner-scoped lists, newest first                               |
-| `Company`          | `(organizationId, name)`                                                                         | Search/sort by name (prefix search; `pg_trgm` later if needed) |
-| `Contact`          | `(organizationId, ownerId, createdAt)`, `(organizationId, companyId)`, `(organizationId, email)` | Lists, "contacts of a company", search by email                |
-| `Lead`             | `(organizationId, ownerId, status, createdAt)`                                                   | Main list: my leads filtered by status                         |
-| `Lead`             | `(organizationId, source)`                                                                       | Report: leads by source                                        |
-| `Lead`             | `(organizationId, status, convertedAt)`                                                          | Report: conversion rate over time                              |
-| `PipelineStage`    | `(pipelineId, position)`                                                                         | Ordered stages of a pipeline                                   |
-| `Deal`             | `(organizationId, ownerId, status, expectedCloseDate)`                                           | My open deals, forecast by close date                          |
-| `Deal`             | `(organizationId, pipelineId, stageId, status)`                                                  | Kanban board and pipeline summary                              |
-| `Deal`             | `(organizationId, status, closedAt)`                                                             | Reports: win rate and revenue by period                        |
-| `DealStageHistory` | `(dealId, changedAt)`                                                                            | Stage timeline of one deal                                     |
-| `Task`             | `(organizationId, assigneeId, status, dueDate)`                                                  | "My open tasks by due date"; overdue detection                 |
-| `Task`             | `(status, dueDate)` partial where open (raw SQL)                                                 | Overdue-checker job across all orgs                            |
-| `Task`             | `(organizationId, dealId)`, `(…, leadId)`, `(…, contactId)`, `(…, companyId)`                    | Tasks of an entity                                             |
-| `Activity`         | `(organizationId, dealId, occurredAt desc, id)` — same for `leadId`, `contactId`, `companyId`    | Cursor-paginated timeline per entity                           |
-| `Notification`     | `(userId, readAt, createdAt desc)`                                                               | Unread inbox and unread count                                  |
-| `AuditLog`         | `(organizationId, entityType, entityId, createdAt desc)`                                         | History of one record                                          |
-| `AuditLog`         | `(organizationId, actorId, createdAt desc)`                                                      | "What did this user do"                                        |
+| Table              | Index                                                                                            | Query it serves                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| every tenant table | `(id, organizationId)` unique                                                                    | Composite FK target (section 5.2)                                 |
+| `User`             | `(organizationId, roleId)`, `(organizationId, managerId)`                                        | Team visibility: "users whose manager is X"                       |
+| `RefreshToken`     | `(userId)`, `(expiresAt)`                                                                        | Revoke-all for a user; cleanup of expired tokens                  |
+| `Company`          | `(organizationId, ownerId, createdAt)`                                                           | Owner-scoped lists, newest first                                  |
+| `Company`          | `(organizationId, name)`                                                                         | Search/sort by name (prefix search; `pg_trgm` later if needed)    |
+| `Contact`          | `(organizationId, ownerId, createdAt)`, `(organizationId, companyId)`, `(organizationId, email)` | Lists, "contacts of a company", search by email                   |
+| `Lead`             | `(organizationId, ownerId, status, createdAt)`                                                   | Main list: my leads filtered by status                            |
+| `Lead`             | `(organizationId, source)`                                                                       | Report: leads by source                                           |
+| `Lead`             | `(organizationId, status, convertedAt)`                                                          | Report: conversion rate over time                                 |
+| `PipelineStage`    | `(pipelineId, position)`                                                                         | Ordered stages of a pipeline                                      |
+| `Deal`             | `(organizationId, ownerId, status, expectedCloseDate)`                                           | My open deals, forecast by close date                             |
+| `Deal`             | `(organizationId, pipelineId, stageId, status)`                                                  | Kanban board and pipeline summary                                 |
+| `Deal`             | `(organizationId, status, closedAt)`                                                             | Reports: win rate and revenue by period                           |
+| `DealStageHistory` | `(dealId, changedAt)`                                                                            | Stage timeline of one deal                                        |
+| `Task`             | `(organizationId, assigneeId, status, dueDate)`                                                  | "My open tasks by due date"; overdue detection                    |
+| `Task`             | `(status, dueDate)` partial where open (raw SQL)                                                 | Overdue-checker job across all orgs                               |
+| `Task`             | `(organizationId, dealId)`, `(…, leadId)`, `(…, contactId)`, `(…, companyId)`                    | Tasks of an entity                                                |
+| `Activity`         | `(organizationId, dealId, occurredAt desc, id)` — same for `leadId`, `contactId`, `companyId`    | Cursor-paginated timeline per entity                              |
+| `Notification`     | `(userId, readAt, createdAt desc)`                                                               | Unread inbox and unread count                                     |
+| `Notification`     | unique `(organizationId, dedupeKey)`                                                             | A retried or duplicated queue job cannot notify twice (Phase 12a) |
+| `AuditLog`         | `(organizationId, entityType, entityId, createdAt desc)`                                         | History of one record                                             |
+| `AuditLog`         | `(organizationId, actorId, createdAt desc)`                                                      | "What did this user do"                                           |
 
 Pagination choice: **cursor** for `Activity` and `AuditLog` (append-heavy, large); **offset** for all other lists.
 

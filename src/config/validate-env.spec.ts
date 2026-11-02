@@ -46,6 +46,32 @@ describe('validateEnv', () => {
   });
 });
 
+describe('queue settings', () => {
+  it('defaults to the "salesflow" prefix with workers on and no Redis password', () => {
+    expect(validateEnv(BASE_ENV)).toMatchObject({
+      QUEUE_PREFIX: 'salesflow',
+      QUEUE_WORKERS_ENABLED: 'true',
+      REDIS_PASSWORD: '',
+    });
+  });
+
+  it('accepts workers switched off', () => {
+    expect(validateEnv({ ...BASE_ENV, QUEUE_WORKERS_ENABLED: 'false' }).QUEUE_WORKERS_ENABLED).toBe(
+      'false',
+    );
+  });
+
+  it.each(['yes', '1', 'TRUE'])('rejects QUEUE_WORKERS_ENABLED=%s', (value) => {
+    expect(() => validateEnv({ ...BASE_ENV, QUEUE_WORKERS_ENABLED: value })).toThrow(
+      /QUEUE_WORKERS_ENABLED/,
+    );
+  });
+
+  it.each(['a:b', 'has space', '', 'a*b'])('rejects the unsafe QUEUE_PREFIX "%s"', (value) => {
+    expect(() => validateEnv({ ...BASE_ENV, QUEUE_PREFIX: value })).toThrow(/QUEUE_PREFIX/);
+  });
+});
+
 describe('parseTrustProxy', () => {
   it.each([
     ['false', false],

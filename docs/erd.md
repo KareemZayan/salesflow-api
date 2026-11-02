@@ -387,6 +387,8 @@ PostgreSQL RLS would add a second wall: policies like `organizationId = current_
 
 No public registration. New organizations are created by an **idempotent CLI script** (`pnpm org:create --name ... --slug ... --admin-email ...`) that, in one transaction, creates the org, its three default roles with their permissions, the first admin user, and the default pipeline and stages. The core seed (Phase 4) reuses the same function for the first org. A protected platform-admin endpoint can be added later if needed.
 
+**As built (Phase 6d):** `pnpm org:create` also accepts `--admin-first-name`, `--admin-last-name` and `--currency`; it is idempotent on the slug (same slug + same ADMIN email = no-op, any other clash = exit 1) and the first admin gets a generated one-time password with `mustChangePassword = true`. Organization settings (`name`, `defaultCurrency`) are edited through `PATCH /organizations/current` (permission `organizations:update`); `slug` and `isActive` are not editable through the API. See ADR 0006.
+
 ## 6. Index plan
 
 Rule: tenant-scoped query patterns **lead with `organizationId`**. Soft-deleted rows are filtered by `deletedAt: null`, so lists that need it include `deletedAt` where it helps.

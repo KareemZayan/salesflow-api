@@ -1,7 +1,9 @@
 import { z } from 'zod';
-
-// Shipped in .env.example. Running a production seed with it would create a known-password admin.
-export const PLACEHOLDER_ADMIN_PASSWORD = 'change_me_strong_password';
+import {
+  isRejectedPassword,
+  passwordLengthProblem,
+} from '../../src/common/policies/password-policy';
+import { ORGANIZATION_SLUG_PATTERN } from '../../src/common/policies/organization-policy';
 
 const seedEnvSchema = z
   .object({
@@ -14,14 +16,20 @@ const seedEnvSchema = z
     SEED_ORG_NAME: z.string().min(1).default('Demo Organization'),
     SEED_ORG_SLUG: z
       .string()
-      .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'must be a lowercase slug')
+      .regex(ORGANIZATION_SLUG_PATTERN, 'must be a lowercase slug')
       .default('demo'),
     SEED_ADMIN_EMAIL: z.string().email(),
-    SEED_ADMIN_PASSWORD: z.string().min(12, 'must be at least 12 characters'),
+    SEED_ADMIN_PASSWORD: z.string(),
   })
   .superRefine((env, ctx) => {
+    // Same length rules as the API. The blocklist (placeholder) only applies in production, so the
+    // committed .env.example still works for local development.
+    const lengthProblem = passwordLengthProblem(env.SEED_ADMIN_PASSWORD);
+    if (lengthProblem) {
+      ctx.addIssue({ code: 'custom', path: ['SEED_ADMIN_PASSWORD'], message: lengthProblem });
+    }
     if (env.NODE_ENV !== 'production') return;
-    if (env.SEED_ADMIN_PASSWORD === PLACEHOLDER_ADMIN_PASSWORD) {
+    if (isRejectedPassword(env.SEED_ADMIN_PASSWORD)) {
       ctx.addIssue({
         code: 'custom',
         path: ['SEED_ADMIN_PASSWORD'],

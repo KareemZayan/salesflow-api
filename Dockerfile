@@ -44,6 +44,8 @@ COPY --chown=node:node package.json prisma.config.ts ./
 # Migrations and the seed run from this image (docker/entrypoint.sh); the seed imports the generated client.
 COPY --chown=node:node prisma ./prisma
 COPY --from=build --chown=node:node /app/src/generated ./src/generated
+# Pure policy files (password, currency, organization) shared by the API, the seed and org:create.
+COPY --from=build --chown=node:node /app/src/common/policies ./src/common/policies
 COPY --chown=node:node docker/entrypoint.sh ./docker/entrypoint.sh
 RUN chmod +x ./docker/entrypoint.sh
 USER node

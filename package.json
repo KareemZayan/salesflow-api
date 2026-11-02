@@ -16,6 +16,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "db:seed": "tsx --env-file-if-exists=.env prisma/seed/index.ts",
+    "org:create": "tsx --env-file-if-exists=.env prisma/seed/create-org.ts",
     "docker:up": "docker compose up --build -d",
     "docker:down": "docker compose down",
     "prepare": "husky || true"

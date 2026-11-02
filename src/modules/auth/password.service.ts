@@ -3,7 +3,7 @@ import { HttpStatus, Injectable, OnModuleInit } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { ERROR_CODES } from '../../common/constants/error-codes';
 import { DomainException } from '../../common/exceptions/domain.exception';
-import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, REJECTED_PASSWORDS } from './auth.constants';
+import { findPasswordProblem } from '../../common/policies/password-policy';
 
 // Thin argon2 wrapper. It uses the library defaults on purpose: the seed hashes the same way, and
 // the dummy hash below must cost the same as a real one for the login timing defence to work.
@@ -35,19 +35,8 @@ export class PasswordService implements OnModuleInit {
   }
 
   assertAcceptable(password: string): void {
-    const problem = this.problemWith(password);
+    const problem = findPasswordProblem(password);
     if (problem)
       throw new DomainException(ERROR_CODES.WEAK_PASSWORD, problem, HttpStatus.BAD_REQUEST);
-  }
-
-  private problemWith(password: string): string | null {
-    if (password.length < PASSWORD_MIN_LENGTH) {
-      return `Password must be at least ${PASSWORD_MIN_LENGTH} characters long`;
-    }
-    if (password.length > PASSWORD_MAX_LENGTH) {
-      return `Password must be at most ${PASSWORD_MAX_LENGTH} characters long`;
-    }
-    if (REJECTED_PASSWORDS.has(password)) return 'This password is not allowed';
-    return null;
   }
 }

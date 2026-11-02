@@ -261,6 +261,17 @@ describe('Users (e2e)', () => {
       expect(cleared.body.managerId).toBeNull();
     });
 
+    it('rejects null for required fields instead of failing with a 500', async () => {
+      const target = await createUser(prisma, orgA);
+      for (const field of ['firstName', 'lastName', 'email', 'roleId']) {
+        await http()
+          .patch(`${API}/users/${target.id}`)
+          .set(as(admin))
+          .send({ [field]: null })
+          .expect(400);
+      }
+    });
+
     it('rejects a duplicate email (409) and unknown fields (400)', async () => {
       const target = await createUser(prisma, orgA);
       const res = await http()

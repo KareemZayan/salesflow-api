@@ -5,7 +5,16 @@ import type { PrismaClient } from './prisma-client';
 export interface SeedOrganizationInput {
   name: string;
   slug: string;
-  admin: { email: string; password: string };
+  // Applied when the organization is created; the schema default (USD) otherwise.
+  defaultCurrency?: string;
+  admin: {
+    email: string;
+    password: string;
+    firstName?: string;
+    lastName?: string;
+    // The core seed keeps the operator-chosen password; org:create forces a change at first sign-in.
+    mustChangePassword?: boolean;
+  };
 }
 
 export interface SeededOrganization {
@@ -59,7 +68,7 @@ export async function seedOrganization(
     const org = await tx.organization.upsert({
       where: { slug: input.slug },
       update: {},
-      create: { name: input.name, slug: input.slug },
+      create: { name: input.name, slug: input.slug, defaultCurrency: input.defaultCurrency },
     });
 
     if (existingAdmin && existingAdmin.organizationId !== org.id) {
@@ -108,10 +117,9 @@ export async function seedOrganization(
             roleId: roleIdByName.get(ROLE_NAMES.ADMIN) as string,
             email,
             passwordHash: passwordHash as string,
-            firstName: 'Admin',
-            lastName: 'User',
-            // The operator chose this password in the environment; no forced change.
-            mustChangePassword: false,
+            firstName: input.admin.firstName ?? 'Admin',
+            lastName: input.admin.lastName ?? 'User',
+            mustChangePassword: input.admin.mustChangePassword ?? false,
           },
         })
       ).id;

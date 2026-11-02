@@ -1,7 +1,10 @@
 import { HttpException } from '@nestjs/common';
-import { PLACEHOLDER_ADMIN_PASSWORD } from '../../../prisma/seed/seed-env';
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PLACEHOLDER_PASSWORD,
+} from '../../common/policies/password-policy';
 import { ERROR_CODES } from '../../common/constants/error-codes';
-import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, REJECTED_PASSWORDS } from './auth.constants';
 import { PasswordService } from './password.service';
 
 describe('PasswordService', () => {
@@ -51,9 +54,8 @@ describe('PasswordService', () => {
       expect(code('a'.repeat(PASSWORD_MAX_LENGTH + 1))).toBe(ERROR_CODES.WEAK_PASSWORD);
     });
 
-    it('rejects the seed placeholder (kept in sync with the seed script)', () => {
-      expect(REJECTED_PASSWORDS.has(PLACEHOLDER_ADMIN_PASSWORD)).toBe(true);
-      expect(code(PLACEHOLDER_ADMIN_PASSWORD)).toBe(ERROR_CODES.WEAK_PASSWORD);
+    it('rejects the shipped placeholder password', () => {
+      expect(code(PLACEHOLDER_PASSWORD)).toBe(ERROR_CODES.WEAK_PASSWORD);
     });
   });
 });

@@ -33,6 +33,7 @@ export const PERMISSIONS = {
   'users:read': 'View users',
   'users:create': 'Create users',
   'users:update': 'Edit and deactivate users',
+  'organizations:update': 'Edit organization settings',
   'roles:read': 'View roles and permissions',
   'roles:manage': 'Manage roles and permissions',
   'audit-logs:read': 'View audit logs',

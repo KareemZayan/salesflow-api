@@ -5,16 +5,20 @@
 // entry (a terminal status maps to `[]`).
 export type TransitionMap<S extends string> = Readonly<Record<S, readonly S[]>>;
 
+// Either a static map (leads, tasks: a fixed set of statuses) or a predicate, for lifecycles whose
+// allowed targets are not a fixed enum (deals move between the stages of THEIR pipeline).
+export type TransitionRule<S extends string> = TransitionMap<S> | ((from: S, to: S) => boolean);
+
 export function isTransitionAllowed<S extends string>(
-  map: TransitionMap<S>,
+  rule: TransitionRule<S>,
   from: S,
   to: S,
 ): boolean {
-  return map[from].includes(to);
+  return typeof rule === 'function' ? rule(from, to) : rule[from].includes(to);
 }
 
 export interface StatusTransition<S extends string, R> {
-  map: TransitionMap<S>;
+  map: TransitionRule<S>;
   to: S;
   // Reads the record WITH the caller's visibility. `null` = no such record for this caller. A hidden
   // record must never be told apart from a missing one, so every lookup here respects visibility.

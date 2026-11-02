@@ -10,8 +10,10 @@ import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { CompaniesModule } from './modules/companies/companies.module';
 import { ContactsModule } from './modules/contacts/contacts.module';
+import { DealsModule } from './modules/deals/deals.module';
 import { LeadsModule } from './modules/leads/leads.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
+import { PipelinesModule } from './modules/pipelines/pipelines.module';
 import { RolesModule } from './modules/roles/roles.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -35,6 +37,8 @@ import { UsersModule } from './modules/users/users.module';
     CompaniesModule,
     ContactsModule,
     LeadsModule,
+    PipelinesModule,
+    DealsModule,
   ],
 })
 export class AppModule {}

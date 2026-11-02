@@ -1,5 +1,6 @@
 import type { PrismaClient } from '../../prisma/seed/prisma-client';
-import type { LeadSource, LeadStatus } from '../../src/generated/prisma/client';
+import { buildStageRows, type OpenStageInput } from '../../src/common/policies/pipeline-policy';
+import type { DealStatus, LeadSource, LeadStatus } from '../../src/generated/prisma/client';
 
 let sequence = 0;
 
@@ -58,6 +59,64 @@ export function createLead(
       firstName: 'Lead',
       lastName: `No${++sequence}`,
       source: 'OTHER',
+      ...overrides,
+    },
+  });
+}
+
+// Pipeline with the given open stages (default: two) plus the Won and Lost stages the server adds.
+export function createPipeline(
+  prisma: PrismaClient,
+  { organizationId }: { organizationId: string },
+  overrides: { name?: string; isDefault?: boolean; openStages?: OpenStageInput[] } = {},
+) {
+  return prisma.pipeline.create({
+    data: {
+      organizationId,
+      name: overrides.name ?? `Pipeline ${++sequence}`,
+      isDefault: overrides.isDefault ?? false,
+      stages: {
+        create: buildStageRows(
+          overrides.openStages ?? [
+            { name: 'First', probability: 10 },
+            { name: 'Second', probability: 50 },
+          ],
+        ),
+      },
+    },
+    include: { stages: { orderBy: { position: 'asc' } } },
+  });
+}
+
+// The pipeline the organization was created with, stages in board order.
+export function findDefaultPipeline(prisma: PrismaClient, organizationId: string) {
+  return prisma.pipeline.findFirstOrThrow({
+    where: { organizationId, isDefault: true },
+    include: { stages: { orderBy: { position: 'asc' } } },
+  });
+}
+
+export function createDeal(
+  prisma: PrismaClient,
+  { organizationId, ownerId }: Owned,
+  placement: { pipelineId: string; stageId: string },
+  overrides: {
+    title?: string;
+    amount?: string;
+    currency?: string;
+    status?: DealStatus;
+    contactId?: string;
+    companyId?: string;
+    deletedAt?: Date;
+  } = {},
+) {
+  return prisma.deal.create({
+    data: {
+      organizationId,
+      ownerId,
+      title: `Deal ${++sequence}`,
+      currency: 'USD',
+      ...placement,
       ...overrides,
     },
   });

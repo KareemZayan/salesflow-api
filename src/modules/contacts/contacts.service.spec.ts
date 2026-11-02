@@ -11,7 +11,7 @@ const repository = {
   findVisible: vi.fn(),
   create: vi.fn(),
   updateVisible: vi.fn(),
-  deleteVisible: vi.fn(),
+  softDeleteIfUnused: vi.fn(),
 };
 const ownership = { resolve: vi.fn(), resolveAssignableOwner: vi.fn() };
 const companies = { assertLinkable: vi.fn() };
@@ -111,14 +111,22 @@ describe('ContactsService.get / list / delete', () => {
   });
 
   it('delete answers 404 when nothing visible was deleted', async () => {
-    repository.deleteVisible.mockResolvedValue(false);
+    repository.softDeleteIfUnused.mockResolvedValue('not-found');
     expect((await failure(service.delete(actor, 'k1'))).status).toBe(404);
-    expect(repository.deleteVisible).toHaveBeenCalledWith(scope, 'k1');
+    expect(repository.softDeleteIfUnused).toHaveBeenCalledWith(scope, 'k1');
   });
 
   it('delete resolves when a visible contact was deleted', async () => {
-    repository.deleteVisible.mockResolvedValue(true);
+    repository.softDeleteIfUnused.mockResolvedValue('deleted');
     await expect(service.delete(actor, 'k1')).resolves.toBeUndefined();
+  });
+
+  it('delete answers 409 CONTACT_HAS_OPEN_DEALS without leaking a count', async () => {
+    repository.softDeleteIfUnused.mockResolvedValue('has-open-deals');
+    const { status, body } = await failure(service.delete(actor, 'k1'));
+    expect(status).toBe(409);
+    expect(body).toContain('CONTACT_HAS_OPEN_DEALS');
+    expect(body).toContain('Contact has open deals and cannot be deleted');
   });
 });
 

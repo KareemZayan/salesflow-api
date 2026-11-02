@@ -1,6 +1,8 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { TenantTransactionClient } from '../../common/tenant/tenant-scope.extension';
 import { ERROR_CODES } from '../../common/constants/error-codes';
+import { publishDomainEvent } from '../../common/events/publish-domain-event';
 import { DomainException } from '../../common/exceptions/domain.exception';
 import { resourceNotFound } from '../../common/exceptions/resource-not-found';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -9,6 +11,9 @@ import { ownerForCreate } from '../../common/visibility/owner-assignment';
 import { OwnershipScopeService } from '../../common/visibility/ownership-scope.service';
 import { LeadStatus } from '../../generated/prisma/client';
 import { CompaniesService } from '../companies/companies.service';
+import { DealsService } from '../deals/deals.service';
+import { DealRecord } from '../deals/deals.repository';
+import { toDealResponse } from '../deals/deals.mapper';
 import { CompanyResponseDto } from '../companies/dto/company-response.dto';
 import { ContactResponseDto } from '../contacts/dto/contact-response.dto';
 import { ContactsService } from '../contacts/contacts.service';
@@ -25,8 +30,10 @@ import { ConversionLock, LeadsRepository } from './leads.repository';
 
 interface ConversionOutcome {
   contactId: string;
+  dealId: string | null;
   contact: ContactResponseDto;
   createdCompany: CompanyResponseDto | null;
+  deal: DealRecord | null;
 }
 
 // Orchestrates the cross-module part of a conversion; the transaction itself, the locks and the
@@ -41,6 +48,7 @@ export class LeadConversionService {
     private readonly contacts: ContactsService,
     private readonly companies: CompaniesService,
     private readonly events: EventEmitter2,
+    private readonly deals: DealsService,
   ) {}
 
   async convert(
@@ -51,6 +59,8 @@ export class LeadConversionService {
     this.assertCompatibleOptions(dto);
     this.assertMayCreate(actor, dto);
     const scope = await this.ownership.resolve(actor);
+    // Before the transaction: the pipeline id is needed to take its (shared) lock.
+    const dealPlan = dto.deal ? await this.deals.resolveDefaults(actor, dto.deal) : undefined;
 
     const converted = await applyStatusTransition({
       map: LEAD_CONVERSION_TRANSITIONS,
@@ -66,7 +76,11 @@ export class LeadConversionService {
             // Linking an existing contact: it is checked under its lock and never modified.
             if (dto.contactId) {
               const contact = await this.contacts.assertLinkable(tx, scope, dto.contactId);
-              return { contactId: contact.id, contact, createdCompany: null };
+              return this.withDeal(tx, actor, dto, dealPlan, lead.ownerId, {
+                contactId: contact.id,
+                contact,
+                createdCompany: null,
+              });
             }
 
             if (dto.createCompany && !lead.companyName) {
@@ -95,8 +109,14 @@ export class LeadConversionService {
               email: lead.email,
               phone: lead.phone,
             });
-            return { contactId: contact.id, contact, createdCompany };
+            return this.withDeal(tx, actor, dto, dealPlan, ownerId, {
+              contactId: contact.id,
+              contact,
+              createdCompany,
+            });
           },
+          // Only a conversion that creates a deal takes the pipeline lock (shared).
+          ...(dealPlan ? [{ pipelineId: dealPlan.pipelineId }] : []),
         ),
       notFound: () => resourceNotFound('Lead'),
       rejected: (from) => rejectedLeadConversion(from),
@@ -104,18 +124,58 @@ export class LeadConversionService {
     });
 
     const { lead, outcome } = converted;
-    this.publish({
+    publishDomainEvent(
+      this.events,
+      this.logger,
+      LEAD_CONVERTED_EVENT,
+      {
+        organizationId: actor.organizationId,
+        leadId: lead.id,
+        contactId: outcome.contactId,
+        companyId: outcome.contact.companyId,
+        dealId: outcome.dealId,
+        ownerId: lead.ownerId,
+        actorId: actor.userId,
+        // convertedAt is set in the same statement that sets CONVERTED, so it is never null here.
+        convertedAt: lead.convertedAt ?? new Date(),
+      } satisfies LeadConvertedEvent,
+      `lead ${lead.id}`,
+    );
+    return {
+      lead,
+      contact: outcome.contact,
+      createdCompany: outcome.createdCompany,
+      deal: outcome.deal ? toDealResponse(outcome.deal) : null,
+    };
+  }
+
+  // Creates the requested deal (if any) inside the conversion transaction, which already holds the
+  // pipeline lock. The deal is linked to the contact (and the company of that contact), owned by
+  // the lead owner, and placed like POST /deals: pipeline and stage are verified here, under the lock
+  // (an invalid one is a 400 that rolls the whole conversion back).
+  private async withDeal(
+    tx: TenantTransactionClient,
+    actor: AuthenticatedUser,
+    dto: ConvertLeadDto,
+    dealPlan: { currency: string; pipelineId: string } | undefined,
+    leadOwnerId: string,
+    records: Pick<ConversionOutcome, 'contactId' | 'contact' | 'createdCompany'>,
+  ): Promise<ConversionOutcome> {
+    if (!dto.deal || !dealPlan) return { ...records, dealId: null, deal: null };
+    const deal = await this.deals.createWithin(tx, {
       organizationId: actor.organizationId,
-      leadId: lead.id,
-      contactId: outcome.contactId,
-      companyId: outcome.contact.companyId,
-      dealId: null,
-      ownerId: lead.ownerId,
       actorId: actor.userId,
-      // convertedAt is set in the same statement that sets CONVERTED, so it is never null here.
-      convertedAt: lead.convertedAt ?? new Date(),
+      ownerId: await ownerForCreate(this.ownership, actor, leadOwnerId),
+      title: dto.deal.title,
+      amount: dto.deal.amount,
+      currency: dealPlan.currency,
+      pipelineId: dealPlan.pipelineId,
+      stageId: dto.deal.stageId,
+      contactId: records.contactId,
+      companyId: records.contact.companyId,
+      expectedCloseDate: dto.deal.expectedCloseDate,
     });
-    return { lead, contact: outcome.contact, createdCompany: outcome.createdCompany };
+    return { ...records, dealId: deal.id, deal };
   }
 
   // Options that contradict each other are a 400, not "the body wins": an existing contact already
@@ -134,11 +194,13 @@ export class LeadConversionService {
   }
 
   // The permission follows what really happens: leads:convert (the route) always; contacts:create
-  // only when a contact is created; companies:create only when a company is created.
+  // only when a contact is created; companies:create only when a company is created; deals:create
+  // only when a deal is requested.
   private assertMayCreate(actor: AuthenticatedUser, dto: ConvertLeadDto): void {
     const needed = [
       ...(dto.contactId ? [] : ['contacts:create']),
       ...(dto.createCompany ? ['companies:create'] : []),
+      ...(dto.deal ? ['deals:create'] : []),
     ];
     if (needed.every((permission) => actor.permissions.includes(permission))) return;
     throw new DomainException(
@@ -152,19 +214,5 @@ export class LeadConversionService {
     if (contactId) return { kind: 'contact', id: contactId };
     if (companyId) return { kind: 'company', id: companyId };
     return undefined;
-  }
-
-  // Fire and forget, after the commit. A listener that throws (synchronously or by rejecting) is
-  // logged and never reaches the caller: the conversion already happened.
-  private publish(event: LeadConvertedEvent): void {
-    const failed = (error: unknown) =>
-      this.logger.error(
-        `A ${LEAD_CONVERTED_EVENT} listener failed (lead ${event.leadId}): ${String(error)}`,
-      );
-    try {
-      this.events.emitAsync(LEAD_CONVERTED_EVENT, event).catch(failed);
-    } catch (error) {
-      failed(error);
-    }
   }
 }

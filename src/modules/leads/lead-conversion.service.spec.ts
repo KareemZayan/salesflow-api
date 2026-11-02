@@ -6,6 +6,7 @@ import { VisibilityScope } from '../../common/visibility/visibility.types';
 import { LeadSource, LeadStatus } from '../../generated/prisma/client';
 import { CompaniesService } from '../companies/companies.service';
 import { ContactsService } from '../contacts/contacts.service';
+import { DealsService } from '../deals/deals.service';
 import { LeadConversionService } from './lead-conversion.service';
 import { LeadConversionSource, LeadRecord, LeadsRepository } from './leads.repository';
 
@@ -20,6 +21,8 @@ const service = new LeadConversionService(
   contacts as unknown as ContactsService,
   companies as unknown as CompaniesService,
   events as unknown as EventEmitter2,
+  // These specs never send a deal; deal behaviour is covered in lead-conversion-deal.service.spec.ts.
+  {} as DealsService,
 );
 
 const actor: AuthenticatedUser = {

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { VisibilityModule } from '../../common/visibility/visibility.module';
 import { CompaniesModule } from '../companies/companies.module';
 import { ContactsModule } from '../contacts/contacts.module';
+import { DealsModule } from '../deals/deals.module';
 import { LeadConversionService } from './lead-conversion.service';
 import { LeadsController } from './leads.controller';
 import { LeadsRepository } from './leads.repository';
@@ -10,7 +11,7 @@ import { LEAD_SCORING_STRATEGY } from './scoring/lead-scoring.strategy';
 import { RuleBasedLeadScoringStrategy } from './scoring/rule-based-lead-scoring.strategy';
 
 @Module({
-  imports: [VisibilityModule, CompaniesModule, ContactsModule],
+  imports: [VisibilityModule, CompaniesModule, ContactsModule, DealsModule],
   controllers: [LeadsController],
   providers: [
     LeadsService,

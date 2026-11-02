@@ -167,4 +167,12 @@ describe('CompaniesService.delete', () => {
     expect(body).toContain('COMPANY_HAS_CONTACTS');
     expect(body).toContain('Company has contacts and cannot be deleted');
   });
+
+  it('409 COMPANY_HAS_DEALS without leaking a count or owners', async () => {
+    repository.softDeleteIfUnused.mockResolvedValue('has-deals');
+    const { status, body } = await failure(service.delete(actor, 'c1'));
+    expect(status).toBe(409);
+    expect(body).toContain('COMPANY_HAS_DEALS');
+    expect(body).toContain('Company has open deals and cannot be deleted');
+  });
 });

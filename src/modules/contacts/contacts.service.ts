@@ -54,7 +54,7 @@ export class ContactsService {
     if (contact) return contact;
     throw new DomainException(
       ERROR_CODES.INVALID_CONTACT,
-      'The contact must be one you are allowed to convert a lead into',
+      'The contact must be one you are allowed to link',
       HttpStatus.BAD_REQUEST,
     );
   }
@@ -120,8 +120,19 @@ export class ContactsService {
   }
 
   async delete(actor: AuthenticatedUser, id: string): Promise<void> {
-    const deleted = await this.repository.deleteVisible(await this.ownership.resolve(actor), id);
-    if (!deleted) throw resourceNotFound('Contact');
+    const outcome = await this.repository.softDeleteIfUnused(
+      await this.ownership.resolve(actor),
+      id,
+    );
+    if (outcome === 'not-found') throw resourceNotFound('Contact');
+    if (outcome === 'has-open-deals') {
+      // No count and no owners: the message must not describe records the caller cannot see.
+      throw new DomainException(
+        ERROR_CODES.CONTACT_HAS_OPEN_DEALS,
+        'Contact has open deals and cannot be deleted',
+        HttpStatus.CONFLICT,
+      );
+    }
   }
 
   private linkTo(scope: VisibilityScope, companyId: string): CompanyLink {

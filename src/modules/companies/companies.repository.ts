@@ -9,7 +9,7 @@ import { nullIfNotFound } from '../../common/utils/prisma-error.util';
 import { containsAny } from '../../common/utils/search.util';
 import { applyVisibility } from '../../common/visibility/ownership-filter';
 import { VisibilityScope } from '../../common/visibility/visibility.types';
-import { Prisma } from '../../generated/prisma/client';
+import { DealStatus, Prisma } from '../../generated/prisma/client';
 import { acquireLock } from '../../infrastructure/prisma/advisory-lock';
 import { PRISMA_TENANT } from '../../infrastructure/prisma/prisma.constants';
 import { COMPANY_SEARCH_FIELDS, COMPANY_SORT_FIELDS } from './companies.constants';
@@ -40,7 +40,7 @@ export type CompanyChanges = Pick<
   'ownerId' | 'name' | 'domain' | 'industry' | 'phone' | 'address'
 >;
 
-export type DeleteOutcome = 'deleted' | 'not-found' | 'has-contacts';
+export type DeleteOutcome = 'deleted' | 'not-found' | 'has-contacts' | 'has-deals';
 
 // The tenant client adds `organizationId` and `deletedAt: null` to every query below. Visibility is
 // ANDed into the same `where` as the read or write itself, so "may the caller touch this row?" and
@@ -120,10 +120,19 @@ export class CompaniesRepository {
       await acquireLock(tx, 'company', id);
       const company = await tx.company.findFirst({
         where: applyVisibility<Prisma.CompanyWhereInput>({ id }, scope),
-        select: { _count: { select: { contacts: { where: { deletedAt: null } } } } },
+        select: {
+          _count: {
+            select: {
+              contacts: { where: { deletedAt: null } },
+              // OPEN deals only: closed ones keep just the id and do not pin the company.
+              deals: { where: { deletedAt: null, status: DealStatus.OPEN } },
+            },
+          },
+        },
       });
       if (!company) return 'not-found';
       if (company._count.contacts > 0) return 'has-contacts';
+      if (company._count.deals > 0) return 'has-deals';
       const deleted = await nullIfNotFound(
         tx.company.delete({
           where: { id, ...applyVisibility<Prisma.CompanyWhereInput>(undefined, scope) },

@@ -2,10 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsString, MaxLength } from 'class-validator';
 import { PASSWORD_MAX_LENGTH } from '../../../common/policies/password-policy';
-
-// Emails are stored lowercase and globally unique, so login normalizes the same way.
-export const normalizeEmail = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' ? value.trim().toLowerCase() : value;
+import { normalizeEmail } from '../../../common/utils/string-transform.util';
 
 export class LoginDto {
   @ApiProperty({ example: 'admin@example.com' })

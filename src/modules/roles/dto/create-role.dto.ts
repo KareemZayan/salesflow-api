@@ -8,6 +8,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
+import { trimString } from '../../../common/utils/string-transform.util';
 import { OptionalButNotNull } from '../../../common/validators/optional-not-null.decorator';
 import {
   MAX_PERMISSION_KEYS,
@@ -15,9 +16,6 @@ import {
   ROLE_DESCRIPTION_MAX_LENGTH,
   ROLE_NAME_MAX_LENGTH,
 } from '../roles.constants';
-
-export const trimString = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' ? value.trim() : value;
 
 export class CreateRoleDto {
   @ApiProperty({ example: 'Support', maxLength: ROLE_NAME_MAX_LENGTH })

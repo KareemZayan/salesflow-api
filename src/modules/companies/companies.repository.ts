@@ -1,0 +1,130 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { TenantPrismaClient } from '../../common/tenant/tenant-scope.extension';
+import { buildPaginated, toOrderBy, toSkipTake } from '../../common/utils/pagination.util';
+import { isRecordNotFound } from '../../common/utils/prisma-error.util';
+import { containsAny } from '../../common/utils/search.util';
+import { applyVisibility } from '../../common/visibility/ownership-filter';
+import { VisibilityScope } from '../../common/visibility/visibility.types';
+import { Prisma } from '../../generated/prisma/client';
+import { acquireLock } from '../../infrastructure/prisma/advisory-lock';
+import { PRISMA_TENANT } from '../../infrastructure/prisma/prisma.constants';
+import { COMPANY_SEARCH_FIELDS, COMPANY_SORT_FIELDS } from './companies.constants';
+import { ListCompaniesQueryDto } from './dto/list-companies-query.dto';
+
+// An explicit select: the response shape is decided here, never by whatever the table gains later.
+const companySelect = {
+  id: true,
+  name: true,
+  domain: true,
+  industry: true,
+  phone: true,
+  address: true,
+  ownerId: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.CompanySelect;
+
+export type CompanyRecord = Prisma.CompanyGetPayload<{ select: typeof companySelect }>;
+
+export type NewCompanyData = Pick<
+  Prisma.CompanyUncheckedCreateInput,
+  'organizationId' | 'ownerId' | 'name' | 'domain' | 'industry' | 'phone' | 'address'
+>;
+
+export type CompanyChanges = Pick<
+  Prisma.CompanyUncheckedUpdateInput,
+  'ownerId' | 'name' | 'domain' | 'industry' | 'phone' | 'address'
+>;
+
+export type DeleteOutcome = 'deleted' | 'not-found' | 'has-contacts';
+
+// The tenant client adds `organizationId` and `deletedAt: null` to every query below. Visibility is
+// ANDed into the same `where` as the read or write itself, so "may the caller touch this row?" and
+// "touch it" are ONE statement: there is no gap in which the owner can change in between.
+@Injectable()
+export class CompaniesRepository {
+  constructor(@Inject(PRISMA_TENANT) private readonly prisma: TenantPrismaClient) {}
+
+  async findPage(
+    scope: VisibilityScope,
+    query: ListCompaniesQueryDto,
+  ): Promise<PaginatedResponseDto<CompanyRecord>> {
+    // One `where` feeds both the rows and the total, so the total never counts invisible rows.
+    const where = applyVisibility<Prisma.CompanyWhereInput>(
+      {
+        ownerId: query.ownerId,
+        ...containsAny<Prisma.CompanyWhereInput>(query.q, COMPANY_SEARCH_FIELDS),
+      },
+      scope,
+    );
+    const [rows, total] = await Promise.all([
+      this.prisma.company.findMany({
+        where,
+        select: companySelect,
+        // `id` as a tiebreaker keeps pages stable when the sort column has duplicates.
+        orderBy: [toOrderBy(query, COMPANY_SORT_FIELDS, 'createdAt'), { id: 'asc' }],
+        ...toSkipTake(query),
+      }),
+      this.prisma.company.count({ where }),
+    ]);
+    return buildPaginated(rows, total, query);
+  }
+
+  findVisible(scope: VisibilityScope, id: string): Promise<CompanyRecord | null> {
+    return this.prisma.company.findFirst({
+      where: applyVisibility<Prisma.CompanyWhereInput>({ id }, scope),
+      select: companySelect,
+    });
+  }
+
+  create(data: NewCompanyData): Promise<CompanyRecord> {
+    return this.prisma.company.create({ data, select: companySelect });
+  }
+
+  // `null` = no such company for this caller (missing, deleted, other tenant, or not visible, or it
+  // was reassigned away from the caller after they loaded it). The caller answers 404 for all.
+  async updateVisible(
+    scope: VisibilityScope,
+    id: string,
+    data: CompanyChanges,
+  ): Promise<CompanyRecord | null> {
+    try {
+      return await this.prisma.company.update({
+        where: { id, ...applyVisibility<Prisma.CompanyWhereInput>(undefined, scope) },
+        data,
+        select: companySelect,
+      });
+    } catch (error) {
+      if (isRecordNotFound(error)) return null;
+      throw error;
+    }
+  }
+
+  // Visibility is checked first, so a company the caller cannot see is a 404 even when it has
+  // contacts (the 409 must never confirm that an invisible company exists). The contact count is
+  // tenant-scoped but deliberately NOT visibility-scoped: other users' contacts block the delete
+  // too. `deletedAt: null` is explicit because the tenant extension does not filter nested
+  // relations (ADR 0002). The 'company' lock is what the contacts module takes before linking a
+  // contact to this company, so a link and this delete can never interleave.
+  async softDeleteIfUnused(scope: VisibilityScope, id: string): Promise<DeleteOutcome> {
+    return this.prisma.$transaction(async (tx) => {
+      await acquireLock(tx, 'company', id);
+      const company = await tx.company.findFirst({
+        where: applyVisibility<Prisma.CompanyWhereInput>({ id }, scope),
+        select: { _count: { select: { contacts: { where: { deletedAt: null } } } } },
+      });
+      if (!company) return 'not-found';
+      if (company._count.contacts > 0) return 'has-contacts';
+      try {
+        await tx.company.delete({
+          where: { id, ...applyVisibility<Prisma.CompanyWhereInput>(undefined, scope) },
+        });
+      } catch (error) {
+        if (isRecordNotFound(error)) return 'not-found';
+        throw error;
+      }
+      return 'deleted';
+    });
+  }
+}

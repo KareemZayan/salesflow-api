@@ -23,6 +23,11 @@ export const ERROR_CODES = {
   INVALID_MANAGER: 'INVALID_MANAGER',
   INVALID_ROLE: 'INVALID_ROLE',
   USER_HAS_ACTIVE_REPORTS: 'USER_HAS_ACTIVE_REPORTS',
+  // One code for every reason an owner cannot be assigned, so the answer reveals nothing about
+  // users the caller may not see (other organization, inactive, outside the team).
+  INVALID_OWNER: 'INVALID_OWNER',
+  EMPTY_UPDATE: 'EMPTY_UPDATE',
+  COMPANY_HAS_CONTACTS: 'COMPANY_HAS_CONTACTS',
   ROLE_NAME_ALREADY_EXISTS: 'ROLE_NAME_ALREADY_EXISTS',
   ROLE_NAME_RESERVED: 'ROLE_NAME_RESERVED',
   ROLE_IN_USE: 'ROLE_IN_USE',

@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 6d — Organizations — done, awaiting your review/commit. **Phase 6 is complete** (6a Auth core, 6b Users, 6c Roles + visibility, 6d Organizations).
+Phase 7a — Companies — done, awaiting your review/commit (branch `feat/phase-7a-companies`). Next: 7b Contacts (only when you ask).
 
 ## Completed phases
 
@@ -18,6 +18,7 @@ Phase 6d — Organizations — done, awaiting your review/commit. **Phase 6 is c
 - Phase 6c — Roles API + OwnershipScopeService (own/team/all), role-assignment escalation fix in Users, seed no longer re-grants trimmed permissions ✅ (2026-11-01)
 - Phase 6d — Organizations (GET/PATCH /organizations/current, idempotent `org:create` CLI, shared policy files, Phase 6 close-out) ✅ (2026-11-02)
 - **Phase 6 — Organizations, Auth, Users, RBAC ✅ complete**
+- Phase 7a — Companies (CRUD, visibility-scoped lists, keyed advisory lock, `resolveAssignableOwner`, shared search/patch helpers) ✅ (2026-11-02)
 
 ## Decisions log
 
@@ -70,13 +71,20 @@ Phase 6d — Organizations — done, awaiting your review/commit. **Phase 6 is c
 - 2026-11-02 — `@OptionalButNotNull()` (common/validators) replaces `@IsOptional()` on NOT NULL PATCH fields: `null` was reaching Prisma as a 500 (found in Users/Roles DTOs while building 6d; fixed + tested)
 - 2026-11-02 — **Deferred to Phase 15:** `org:set-active` CLI (deactivate/reactivate an organization; the JWT strategy already honors `Organization.isActive`, nothing can toggle it except SQL)
 
+- 2026-11-02 — 7a design in ADR 0007: single-statement check-and-act (visibility ANDed into the same `where` as the write; hidden/missing/foreign/deleted/reassigned all answer the same 404). `OwnershipScopeService.resolveAssignableOwner(scope, ownerId)` is the one owner-assignment rule (active user, same org, inside caller scope; one `400 INVALID_OWNER` for every failure); called on create only when owner != caller and on PATCH only when `ownerId` differs from the current owner. Transfers need a manager (team) or admin
+- 2026-11-02 — Company delete: soft delete, blocked by live contacts (`409 COMPANY_HAS_CONTACTS`) via `_count` with explicit `deletedAt: null` (extension does not filter nested relations; proven by an integration test), not visibility-scoped, visibility checked first (404 before 409), no count/owners in the message
+- 2026-11-02 — `acquireOrgLock` replaced by `acquireLock(tx, 'org' | 'company', id)` (`infrastructure/prisma/advisory-lock.ts`); `org` key is still exactly `org:<id>`. Ordering rule: one lock per transaction, else org first then company
+- 2026-11-02 — Prisma does NOT escape LIKE wildcards (proved against Postgres): `containsAny` escapes `%`, `_` and `\`. `domain` is a bare lowercase hostname (URLs rejected with 400, not rewritten); `phone` is a simple regex; blank string or null clears optional columns; empty PATCH = `400 EMPTY_UPDATE`
+- 2026-11-02 — Strict visibility stays (rep cannot link a contact to a company they cannot see). Upgrade path = org-wide company visibility; duplicate-company caveat recorded in ADR 0007
+- 2026-11-02 — Seed grants `companies:delete` / `contacts:delete` to SALES_REP and SALES_MANAGER; "own records only" comes from visibility
+
 ## Open questions
 
 - None.
 
 ## Next step
 
-Phase 7 — Companies & Contacts (first consumer of `OwnershipScopeService`; reuse `@IsCurrencyCode`/policies where relevant) — only when you ask.
+Phase 7b — Contacts (reuse `OwnedListQueryDto`, `containsAny`, `assertHasChanges`, `resolveAssignableOwner`, `acquireLock(tx,'company',id)`; validate the company through an exported `CompaniesService` method so a rep cannot link a company they cannot see; the ERD has no contact-email uniqueness, record that in ADR 0007) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -102,6 +110,9 @@ Phase 7 — Companies & Contacts (first consumer of `OwnershipScopeService`; reu
 - Git: working-tree files are LF (prettier) while git normalizes to CRLF on commit; `git status` shows many "M" files with no content diff. `pnpm-lock.yaml` was rewritten by pnpm 11.28 (large diff) — check it before committing.
 - Integration tests (`pnpm test:integration`) cover the scoping extension against real Postgres; use the same pattern for module isolation tests.
 - Soft-deletable relations in `include` are not auto-filtered (ADR 0002 known limits).
+- Companies (7a): `modules/companies` is the template for owned entities: the repository takes a `VisibilityScope`, builds ONE `where = applyVisibility(filters, scope)` for rows + total, and single-record writes use `update`/`delete` with visibility in the where, mapping P2025 to 404 (`isRecordNotFound`). `CompaniesModule` exports nothing yet: 7b adds a visible-or-404 method on `CompaniesService` and imports the module.
+- Shared helpers added in 7a: `common/dto/owned-list-query.dto.ts`, `common/utils/{search,assert-has-changes,string-transform}.util.ts`, `common/policies/contact-details-policy.ts`, `test/factories/crm.factory.ts` (createCompany / createContact). `trimString` / `normalizeEmail` now live only in `string-transform.util`.
+- `acquireOrgLock` no longer exists; use `acquireLock(tx, 'org', id)`. ADRs 0004 and 0005 still name the old function (historical).
 
 ## Phase 6 summary (reference; details in ADRs 0003-0006)
 

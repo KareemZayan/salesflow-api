@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 7b — Contacts — done, awaiting your review/commit (branch `feat/phase-7b-contacts`, two commits: refactor, then feat). Next: Phase 8 Leads (only when you ask).
+Phase 8a — Leads CRUD + scoring — done, awaiting your review/commit (branch `feat/phase-8a-leads-crud`). Next: Phase 8b status workflow (branch `feat/phase-8b-lead-status`, only when you ask).
 
 ## Completed phases
 
@@ -20,6 +20,7 @@ Phase 7b — Contacts — done, awaiting your review/commit (branch `feat/phase-
 - **Phase 6 — Organizations, Auth, Users, RBAC ✅ complete**
 - Phase 7a — Companies (CRUD, visibility-scoped lists, keyed advisory lock, `resolveAssignableOwner`, shared search/patch helpers) ✅ (2026-11-02)
 - Phase 7b — Contacts (CRUD, company link under the company lock, `INVALID_COMPANY`, shared helpers extracted from Companies) ✅ (2026-11-02)
+- Phase 8a — Leads (CRUD, sources, assignment, rule-based scoring via Strategy, `lead` advisory lock, ADR 0008) ✅ (2026-11-02)
 
 ## Decisions log
 
@@ -82,6 +83,9 @@ Phase 7b — Contacts — done, awaiting your review/commit (branch `feat/phase-
 - 2026-11-02 — 7b design in ADR 0007: `companyId` is checked by `CompaniesService.assertLinkable(tx, scope, id)` INSIDE the transaction that holds `acquireLock(tx,'company',id)` and performs the write (option chosen: tx-aware, not the READ COMMITTED shortcut). Required conditions: write in the same tx as the lock; company delete counts after taking the lock. One `400 INVALID_COMPANY` (identical message) for missing / deleted / foreign-org / not-visible. Only a CHANGED companyId is checked and locked (the NEW company only); `null` unlinks with no lock. Response has `companyId` only (nested `{id,name}` is the upgrade path, needs explicit `deletedAt` filter + visibility)
 - 2026-11-02 — Contact email is optional (`String?` in the ERD), always trimmed + lowercased, blank = NULL, not unique. First/last name required. Soft delete has no blockers yet
 - 2026-11-02 — Extracted before Contacts (own commit, 7a tests untouched and green): `queryPage` (plain function; 7a used `Promise.all`, kept), `nullIfNotFound` (P2025 only), `ownerForCreate` / `ownerForTransfer` (free functions in `common/visibility/owner-assignment.ts`; NOT methods on `OwnershipScopeService`, because the unmodified 7a spec mocks that class with only `resolve`/`resolveAssignableOwner`), `resourceNotFound(entity)`, `trimLowerToNull` (replaces `normalizeDomain`)
+- 2026-11-02 — 8a design in ADR 0008: **null-owner rule = no ownerless leads** (`ownerId` stays NOT NULL; unassigned pool = nullable owner + claim + third `applyVisibility` branch is the upgrade path; this closes the 6c "ownerless records" question). Score is server-computed, stored, never client-writable (400 via forbidNonWhitelisted). Weights are adjustable defaults in ONE object `LEAD_SCORE_WEIGHTS` (source 0-40, explicit per source; email +20, phone +15, companyName +10; rounded + clamped 0-100). `SCORING_FIELDS` is the single field list (strategy input type, recompute `select`, service decision). Blank email/phone/companyName = NULL = no points
+- 2026-11-02 — Lead lock: only an update that changes a SCORING field runs in a tx with `acquireLock(tx,'lead',id)` + read-merge-compute-write; owner/name/notes changes take no lock and never touch the score. Lock order documented in `advisory-lock.ts` and ADR 0008: **org, then lead, then company** (Phase 9 conversion takes the lead lock first). Race + "no lock for non-scoring" tests were verified to fail with the lock removed
+- 2026-11-02 — 8b decisions recorded now (ADR 0008): transitions `NEW->CONTACTED|UNQUALIFIED`, `CONTACTED->QUALIFIED|UNQUALIFIED`, `QUALIFIED->UNQUALIFIED`, `UNQUALIFIED->CONTACTED` (reopen returns to CONTACTED: already contacted, and must be re-evaluated rather than silently re-qualified); **status is excluded from the score** (UNQUALIFIED does not zero it; if status ever enters the score, recompute inside the compare-and-set tx under the lead lock and add it to `SCORING_FIELDS`); compare-and-set -> `409 INVALID_STATUS_TRANSITION`; converted leads read-only (`409 LEAD_ALREADY_CONVERTED`); any 404-vs-409 lookup must respect visibility
 - **TODO Phase 10/11:** decide what open deals / tasks mean for deleting a contact (block with 409? unlink?) and add the check to `ContactsRepository.deleteVisible`
 - **Follow-up (any time):** Users / Roles / Organizations still build their own RESOURCE_NOT_FOUND; move them to `resourceNotFound(entity)`
 
@@ -91,7 +95,7 @@ Phase 7b — Contacts — done, awaiting your review/commit (branch `feat/phase-
 
 ## Next step
 
-Phase 8 — Leads (statuses, sources, scoring Strategy; decide the null-owner record rule; reuse `queryPage`, `ownerForCreate`/`ownerForTransfer`, `nullIfNotFound`, `resourceNotFound`, `OwnedListQueryDto`, `containsAny`, `assertHasChanges`) — only when you ask.
+Phase 8b — lead status workflow (`PATCH /leads/:id/status`, transition map, compare-and-set, converted-lead guard; decisions already in ADR 0008) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -120,6 +124,8 @@ Phase 8 — Leads (statuses, sources, scoring Strategy; decide the null-owner re
 - Companies (7a): `modules/companies` is the template for owned entities: the repository takes a `VisibilityScope`, builds ONE `where = applyVisibility(filters, scope)` for rows + total, and single-record writes use `update`/`delete` with visibility in the where, mapping P2025 to 404 (`isRecordNotFound`). `CompaniesModule` exports nothing yet: 7b adds a visible-or-404 method on `CompaniesService` and imports the module.
 - Shared helpers added in 7a: `common/dto/owned-list-query.dto.ts`, `common/utils/{search,assert-has-changes,string-transform}.util.ts`, `common/policies/contact-details-policy.ts`, `test/factories/crm.factory.ts` (createCompany / createContact). `trimString` / `normalizeEmail` now live only in `string-transform.util`.
 - Contacts (7b): `modules/contacts` follows the Companies template; `CompaniesModule` now exports `CompaniesService` (`assertLinkable`). `ContactsRepository.inCompanyLock` is the only place that takes the company lock for linking; any new entity that links to a company must do the same (ADR 0007). Race e2e tests loop 20x and were verified to fail when the lock is removed.
+- Leads (8a): `modules/leads` (Companies/Contacts template) + `scoring/` (`LeadScoringStrategy` interface + `LEAD_SCORING_STRATEGY` token in `lead-scoring.strategy.ts`, weights in `lead-scoring.constants.ts`, `computeRuleBasedScore(input, weights)` pure fn so tests can try other weights). `LeadsRepository.updateVisible(scope,id,changes,rescore?)`: `rescore` present => lead lock + tx. Responses carry `status` (always NEW until 8b) and the read-only conversion fields. `LeadsModule` exports nothing. `test/factories/crm.factory.ts` has `createLead`. List filters: `status`, `source`, `ownerId`, `q`; sort includes `score`.
+- Python is not installed on this machine; use Edit/Write or shell tools for scripted edits. Bash heredocs containing `'` inside test code failed once: use the Write tool for big files.
 - `acquireOrgLock` no longer exists; use `acquireLock(tx, 'org', id)`. ADRs 0004 and 0005 still name the old function (historical).
 
 ## Phase 6 summary (reference; details in ADRs 0003-0006)

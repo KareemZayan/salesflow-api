@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 7a — Companies — done, awaiting your review/commit (branch `feat/phase-7a-companies`). Next: 7b Contacts (only when you ask).
+Phase 7b — Contacts — done, awaiting your review/commit (branch `feat/phase-7b-contacts`, two commits: refactor, then feat). Next: Phase 8 Leads (only when you ask).
 
 ## Completed phases
 
@@ -19,6 +19,7 @@ Phase 7a — Companies — done, awaiting your review/commit (branch `feat/phase
 - Phase 6d — Organizations (GET/PATCH /organizations/current, idempotent `org:create` CLI, shared policy files, Phase 6 close-out) ✅ (2026-11-02)
 - **Phase 6 — Organizations, Auth, Users, RBAC ✅ complete**
 - Phase 7a — Companies (CRUD, visibility-scoped lists, keyed advisory lock, `resolveAssignableOwner`, shared search/patch helpers) ✅ (2026-11-02)
+- Phase 7b — Contacts (CRUD, company link under the company lock, `INVALID_COMPANY`, shared helpers extracted from Companies) ✅ (2026-11-02)
 
 ## Decisions log
 
@@ -78,13 +79,19 @@ Phase 7a — Companies — done, awaiting your review/commit (branch `feat/phase
 - 2026-11-02 — Strict visibility stays (rep cannot link a contact to a company they cannot see). Upgrade path = org-wide company visibility; duplicate-company caveat recorded in ADR 0007
 - 2026-11-02 — Seed grants `companies:delete` / `contacts:delete` to SALES_REP and SALES_MANAGER; "own records only" comes from visibility
 
+- 2026-11-02 — 7b design in ADR 0007: `companyId` is checked by `CompaniesService.assertLinkable(tx, scope, id)` INSIDE the transaction that holds `acquireLock(tx,'company',id)` and performs the write (option chosen: tx-aware, not the READ COMMITTED shortcut). Required conditions: write in the same tx as the lock; company delete counts after taking the lock. One `400 INVALID_COMPANY` (identical message) for missing / deleted / foreign-org / not-visible. Only a CHANGED companyId is checked and locked (the NEW company only); `null` unlinks with no lock. Response has `companyId` only (nested `{id,name}` is the upgrade path, needs explicit `deletedAt` filter + visibility)
+- 2026-11-02 — Contact email is optional (`String?` in the ERD), always trimmed + lowercased, blank = NULL, not unique. First/last name required. Soft delete has no blockers yet
+- 2026-11-02 — Extracted before Contacts (own commit, 7a tests untouched and green): `queryPage` (plain function; 7a used `Promise.all`, kept), `nullIfNotFound` (P2025 only), `ownerForCreate` / `ownerForTransfer` (free functions in `common/visibility/owner-assignment.ts`; NOT methods on `OwnershipScopeService`, because the unmodified 7a spec mocks that class with only `resolve`/`resolveAssignableOwner`), `resourceNotFound(entity)`, `trimLowerToNull` (replaces `normalizeDomain`)
+- **TODO Phase 10/11:** decide what open deals / tasks mean for deleting a contact (block with 409? unlink?) and add the check to `ContactsRepository.deleteVisible`
+- **Follow-up (any time):** Users / Roles / Organizations still build their own RESOURCE_NOT_FOUND; move them to `resourceNotFound(entity)`
+
 ## Open questions
 
 - None.
 
 ## Next step
 
-Phase 7b — Contacts (reuse `OwnedListQueryDto`, `containsAny`, `assertHasChanges`, `resolveAssignableOwner`, `acquireLock(tx,'company',id)`; validate the company through an exported `CompaniesService` method so a rep cannot link a company they cannot see; the ERD has no contact-email uniqueness, record that in ADR 0007) — only when you ask.
+Phase 8 — Leads (statuses, sources, scoring Strategy; decide the null-owner record rule; reuse `queryPage`, `ownerForCreate`/`ownerForTransfer`, `nullIfNotFound`, `resourceNotFound`, `OwnedListQueryDto`, `containsAny`, `assertHasChanges`) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -112,6 +119,7 @@ Phase 7b — Contacts (reuse `OwnedListQueryDto`, `containsAny`, `assertHasChang
 - Soft-deletable relations in `include` are not auto-filtered (ADR 0002 known limits).
 - Companies (7a): `modules/companies` is the template for owned entities: the repository takes a `VisibilityScope`, builds ONE `where = applyVisibility(filters, scope)` for rows + total, and single-record writes use `update`/`delete` with visibility in the where, mapping P2025 to 404 (`isRecordNotFound`). `CompaniesModule` exports nothing yet: 7b adds a visible-or-404 method on `CompaniesService` and imports the module.
 - Shared helpers added in 7a: `common/dto/owned-list-query.dto.ts`, `common/utils/{search,assert-has-changes,string-transform}.util.ts`, `common/policies/contact-details-policy.ts`, `test/factories/crm.factory.ts` (createCompany / createContact). `trimString` / `normalizeEmail` now live only in `string-transform.util`.
+- Contacts (7b): `modules/contacts` follows the Companies template; `CompaniesModule` now exports `CompaniesService` (`assertLinkable`). `ContactsRepository.inCompanyLock` is the only place that takes the company lock for linking; any new entity that links to a company must do the same (ADR 0007). Race e2e tests loop 20x and were verified to fail when the lock is removed.
 - `acquireOrgLock` no longer exists; use `acquireLock(tx, 'org', id)`. ADRs 0004 and 0005 still name the old function (historical).
 
 ## Phase 6 summary (reference; details in ADRs 0003-0006)

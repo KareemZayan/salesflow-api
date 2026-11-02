@@ -8,5 +8,6 @@ import { CompaniesService } from './companies.service';
   imports: [VisibilityModule],
   controllers: [CompaniesController],
   providers: [CompaniesService, CompaniesRepository],
+  exports: [CompaniesService],
 })
 export class CompaniesModule {}

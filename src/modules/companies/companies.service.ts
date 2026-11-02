@@ -3,8 +3,12 @@ import { ERROR_CODES } from '../../common/constants/error-codes';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { DomainException } from '../../common/exceptions/domain.exception';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { resourceNotFound } from '../../common/exceptions/resource-not-found';
 import { assertHasChanges } from '../../common/utils/assert-has-changes.util';
+import { ownerForCreate, ownerForTransfer } from '../../common/visibility/owner-assignment';
+import { TenantTransactionClient } from '../../common/tenant/tenant-scope.extension';
 import { OwnershipScopeService } from '../../common/visibility/ownership-scope.service';
+import { VisibilityScope } from '../../common/visibility/visibility.types';
 import { CompaniesRepository, CompanyChanges, CompanyRecord } from './companies.repository';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { ListCompaniesQueryDto } from './dto/list-companies-query.dto';
@@ -30,16 +34,29 @@ export class CompaniesService {
     return company;
   }
 
+  // For modules that link their records to a company (contacts). Call it INSIDE the transaction that
+  // holds the 'company' lock and performs the link: the company cannot then be deleted between this
+  // check and the write, because the delete waits for the same lock and counts afterwards.
+  // Missing, deleted, foreign and not-visible companies all give the same 400.
+  async assertLinkable(
+    db: Pick<TenantTransactionClient, 'company'>,
+    scope: VisibilityScope,
+    companyId: string,
+  ): Promise<void> {
+    if (await this.repository.findVisible(scope, companyId, db)) return;
+    throw new DomainException(
+      ERROR_CODES.INVALID_COMPANY,
+      'The company must be one you are allowed to link contacts to',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
   async create(actor: AuthenticatedUser, dto: CreateCompanyDto): Promise<CompanyRecord> {
     const { ownerId, ...fields } = dto;
-    const owner =
-      ownerId && ownerId !== actor.userId
-        ? await this.ownership.resolveAssignableOwner(await this.ownership.resolve(actor), ownerId)
-        : actor.userId;
     return this.repository.create({
       ...fields,
       organizationId: actor.organizationId,
-      ownerId: owner,
+      ownerId: await ownerForCreate(this.ownership, actor, ownerId),
     });
   }
 
@@ -56,11 +73,7 @@ export class CompaniesService {
     if (ownerId !== undefined) {
       const current = await this.repository.findVisible(scope, id);
       if (!current) throw this.notFound();
-      // Only a real transfer is checked and written. An unchanged owner stays as is, so a manager
-      // can edit a company whose owner has since been deactivated.
-      if (ownerId !== current.ownerId) {
-        changes.ownerId = await this.ownership.resolveAssignableOwner(scope, ownerId);
-      }
+      changes.ownerId = await ownerForTransfer(this.ownership, scope, ownerId, current.ownerId);
     }
 
     // The write carries the visibility filter itself: if the company was reassigned away from the
@@ -87,10 +100,6 @@ export class CompaniesService {
   }
 
   private notFound(): DomainException {
-    return new DomainException(
-      ERROR_CODES.RESOURCE_NOT_FOUND,
-      'Company not found',
-      HttpStatus.NOT_FOUND,
-    );
+    return resourceNotFound('Company');
   }
 }

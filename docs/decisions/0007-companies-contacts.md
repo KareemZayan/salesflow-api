@@ -1,6 +1,6 @@
 # ADR 0007 — Companies and Contacts (Phase 7)
 
-Status: accepted (7a Companies implemented; 7b Contacts will extend it)
+Status: accepted (7a Companies and 7b Contacts implemented)
 
 Companies are the first feature built on the Phase 5/6 blocks: the tenant extension, soft delete,
 composite FKs and `OwnershipScopeService`. The decisions below are the template for Leads, Deals
@@ -94,7 +94,7 @@ for a rep, another user's id yields an empty page (200), not 403 and not data.
 ## Known limits and upgrade paths
 
 - **Strict visibility model.** A rep sees only their own companies, so in 7b a rep cannot link a
-  contact to a company they cannot see (404). The upgrade path is **organization-wide company
+  contact to a company they cannot see (`400 INVALID_COMPANY`). The upgrade path is **organization-wide company
   visibility** (companies readable by the whole organization, contacts/deals/leads still
   owner-scoped). That changes the visibility model and needs its own decision.
 - **Duplicate companies.** The ERD deliberately has no name or domain uniqueness. Because a rep
@@ -108,7 +108,64 @@ for a rep, another user's id yields an empty page (200), not 403 and not data.
 `SALES_REP` and `SALES_MANAGER` both hold `companies:delete` and `contacts:delete` (`CRM_WORK`).
 "Own records only" for a rep comes from visibility, not from withholding the permission.
 
-## Contact email uniqueness (7b)
+## Contacts (7b)
 
-To be recorded with 7b: the ERD (decision 4) has **no** uniqueness on contact email, so there is no
-unique index; email is trimmed, lowercased and format-validated.
+### Contact email: optional, trimmed, lowercased, not unique
+
+The ERD column is `email String?` (**optional**) and decision 4 puts **no** uniqueness on contact
+email, so there is no unique index. `firstName` and `lastName` are required. Email is always trimmed
+and lowercased (`trimLowerToNull`, shared with `Company.domain`); a blank string is stored as NULL;
+format is checked with `IsEmail`. The same person may exist twice (two reps, two imports); deduping is
+a later feature, not a constraint.
+
+### Linking to a company (`companyId`)
+
+- `ContactsService` asks `CompaniesService.assertLinkable(db, scope, companyId)`, never the companies
+  repository (modules talk through exported services). Missing, soft-deleted, other-organization and
+  not-visible companies are all **`400 INVALID_COMPANY`** with one identical message, like
+  `INVALID_OWNER`, so the answer never confirms that a company exists.
+- Strict visibility applies: a rep links only companies they can see; a manager also those of their
+  team; an admin any company of the organization.
+- Only a **changed** `companyId` is checked and locked. Repeating the stored value is a no-op, so a rep
+  can still edit a contact whose company has since moved to someone else. `companyId: null` unlinks
+  and needs neither check nor lock.
+- Changing the link locks the **new** company only.
+
+### Link versus company delete: the two required conditions
+
+Companies refuse to be deleted while they have live contacts. Both sides take the same advisory lock
+`company:<id>` (`acquireLock(tx, 'company', id)`), and correctness needs BOTH of these:
+
+1. **The check and the write run in the same transaction that holds the lock.** `assertLinkable`
+   takes the transaction client, so the visibility read and the contact write happen under the lock
+   (`ContactsRepository.inCompanyLock`). Correctness does not depend on READ COMMITTED snapshot timing.
+2. **The company delete counts its contacts after taking the lock** (`softDeleteIfUnused`).
+
+Then either the delete finishes first (the link sees a deleted company: `INVALID_COMPANY`) or the
+contact is committed first (the delete sees it: `COMPANY_HAS_CONTACTS`). The e2e race tests loop 20
+times for create+delete and update+delete and assert the invariant (no live contact on a deleted
+company), not who wins; they fail when the lock is removed.
+
+### Response and lists
+
+- The response carries `companyId` only. Upgrade path: a nested `company: { id, name }`, which must
+  filter `deletedAt: null` explicitly (the tenant extension does not filter nested relations, ADR 0002)
+  and apply the same company visibility, otherwise a rep would read the name of a company that moved
+  away from them.
+- Offset pagination, whitelisted sort (`lastName`, `firstName`, `createdAt`, `updatedAt`, `id`
+  tiebreaker), `q` over first name, last name, email and job title. A full-name query such as
+  "Sara Hassan" does not match across the two columns (known limit; a combined search is a later
+  feature). `?companyId=` narrows and never widens: the id of a company the caller cannot see gives an
+  empty 200.
+
+### Delete
+
+Soft delete with **no blockers** for now. What open deals (Phase 10) and open tasks (Phase 11) mean for
+a contact is decided when those tables exist; see the TODO in PROJECT_STATUS.md.
+
+## Shared helpers extracted for 7b (no copy of Companies code)
+
+`queryPage` (one `where` for rows and count, plain function), `nullIfNotFound` (P2025 only),
+`ownerForCreate` / `ownerForTransfer` (free functions over `OwnershipScopeService`),
+`resourceNotFound(entity)`, `trimLowerToNull`. Users, Roles and Organizations still build their own 404;
+moving them to `resourceNotFound` is a follow-up.

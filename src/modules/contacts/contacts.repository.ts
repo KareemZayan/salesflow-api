@@ -9,7 +9,7 @@ import { nullIfNotFound } from '../../common/utils/prisma-error.util';
 import { containsAny } from '../../common/utils/search.util';
 import { applyVisibility } from '../../common/visibility/ownership-filter';
 import { VisibilityScope } from '../../common/visibility/visibility.types';
-import { Prisma } from '../../generated/prisma/client';
+import { DealStatus, Prisma } from '../../generated/prisma/client';
 import { acquireLock } from '../../infrastructure/prisma/advisory-lock';
 import { PRISMA_TENANT } from '../../infrastructure/prisma/prisma.constants';
 import { CONTACT_SEARCH_FIELDS, CONTACT_SORT_FIELDS } from './contacts.constants';
@@ -54,6 +54,8 @@ export interface CompanyLink {
   companyId: string;
   verify: (db: Pick<TenantTransactionClient, 'company'>) => Promise<void>;
 }
+
+export type DeleteOutcome = 'deleted' | 'not-found' | 'has-open-deals';
 
 type ContactDb = Pick<TenantTransactionClient, 'contact'>;
 
@@ -127,20 +129,31 @@ export class ContactsRepository {
     );
   }
 
-  // Soft delete (the tenant client turns `delete` into setting `deletedAt`). Nothing blocks it yet;
-  // Phase 10/11 decide what open deals and tasks mean for a contact. It takes the 'contact' lock,
-  // the one lead conversion holds while it checks and links an existing contact: a conversion that
-  // runs first links a live contact, one that runs after sees it deleted (INVALID_CONTACT).
-  async deleteVisible(scope: VisibilityScope, id: string): Promise<boolean> {
+  // Soft delete (the tenant client turns `delete` into setting `deletedAt`), refused while the
+  // contact has OPEN deals. It takes the 'contact' lock, the one lead conversion and deal writes
+  // hold while they check and link an existing contact: a link that runs first is counted here, one
+  // that runs after sees the contact deleted. Visibility is checked first, so a contact the caller
+  // cannot see is "not-found" even when it has deals. The count is NOT visibility-scoped (the deals
+  // of other users block too), and `deletedAt` / status are explicit because the tenant client does
+  // not filter nested relations (ADR 0002). Closed deals do not block: they keep only the id.
+  async softDeleteIfUnused(scope: VisibilityScope, id: string): Promise<DeleteOutcome> {
     return this.prisma.$transaction(async (tx) => {
       await acquireLock(tx, 'contact', id);
+      const contact = await tx.contact.findFirst({
+        where: applyVisibility<Prisma.ContactWhereInput>({ id }, scope),
+        select: {
+          _count: { select: { deals: { where: { deletedAt: null, status: DealStatus.OPEN } } } },
+        },
+      });
+      if (!contact) return 'not-found';
+      if (contact._count.deals > 0) return 'has-open-deals';
       const deleted = await nullIfNotFound(
         tx.contact.delete({
           where: { id, ...applyVisibility<Prisma.ContactWhereInput>(undefined, scope) },
           select: { id: true },
         }),
       );
-      return deleted !== null;
+      return deleted ? 'deleted' : 'not-found';
     });
   }
 

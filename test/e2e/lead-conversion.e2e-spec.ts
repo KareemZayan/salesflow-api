@@ -184,8 +184,10 @@ describe('Lead conversion (e2e)', () => {
       const lead = await qualified(report);
       const res = await convert(reportT, lead.id).expect(200);
 
-      expect(Object.keys(res.body).sort()).toEqual(['contact', 'createdCompany', 'lead']);
+      // Phase 10d added `deal` to the response shape; without a deal in the request it is null.
+      expect(Object.keys(res.body).sort()).toEqual(['contact', 'createdCompany', 'deal', 'lead']);
       expect(res.body.createdCompany).toBeNull();
+      expect(res.body.deal).toBeNull();
       expect(res.body.contact).toMatchObject({
         firstName: lead.firstName,
         lastName: lead.lastName,
@@ -297,7 +299,12 @@ describe('Lead conversion (e2e)', () => {
 
   describe('validation (400)', () => {
     it.each([
-      ['an unknown deal field (Deals come in Phase 10)', { deal: { title: 'x' } }],
+      // A deal is accepted since Phase 10d (lead-conversion-deal.e2e-spec.ts); what stays unknown is
+      // anything that would let the client wire the deal itself.
+      [
+        'an unknown field inside the deal (links and owner are derived)',
+        { deal: { title: 'x', contactId: MISSING_ID } },
+      ],
       ['any other unknown field', { status: 'CONVERTED' }],
       ['a non-uuid contactId', { contactId: 'nope' }],
       ['a null contactId', { contactId: null }],

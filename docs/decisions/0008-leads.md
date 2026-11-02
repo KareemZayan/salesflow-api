@@ -157,14 +157,14 @@ locks, claim).
 
 ### Options (a lead has no `companyId`, only free-text `companyName`)
 
-| Body                          | Result                                                                                                                             |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `{}`                          | New contact from the lead (name, email, phone), no company. `companyName` stays text.                                              |
-| `companyId`                   | New contact under that existing company (visible to the caller, checked under the company lock; else `400 INVALID_COMPANY`)        |
-| `createCompany: true`         | New company named after `companyName`, new contact under it. Lead without a company name: `400`                                    |
-| `contactId`                   | Existing contact linked as it is: **never modified** by lead data (visible and live, else `400 INVALID_CONTACT`)                   |
-| any contradictory combination | `400 INVALID_CONVERSION_OPTIONS`; the body never "wins": `contactId` excludes the other two, `companyId` excludes `createCompany`  |
-| `deal` or any unknown field   | `400 VALIDATION_FAILED` (Deals arrive in Phase 10, which adds an optional `deal` and calls `DealsService` inside this transaction) |
+| Body                          | Result                                                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `{}`                          | New contact from the lead (name, email, phone), no company. `companyName` stays text.                                                            |
+| `companyId`                   | New contact under that existing company (visible to the caller, checked under the company lock; else `400 INVALID_COMPANY`)                      |
+| `createCompany: true`         | New company named after `companyName`, new contact under it. Lead without a company name: `400`                                                  |
+| `contactId`                   | Existing contact linked as it is: **never modified** by lead data (visible and live, else `400 INVALID_CONTACT`)                                 |
+| any contradictory combination | `400 INVALID_CONVERSION_OPTIONS`; the body never "wins": `contactId` excludes the other two, `companyId` excludes `createCompany`                |
+| `deal` (Phase 10d)            | Accepted since Phase 10d: it creates a deal in the same transaction (ADR 0009). An unknown field, inside `deal` too, is `400 VALIDATION_FAILED`. |
 
 New contacts and companies belong to the **lead's owner**, not to the caller (a manager converting a
 rep's lead does not take the records). That goes through `ownerForCreate`, so an inactive owner is

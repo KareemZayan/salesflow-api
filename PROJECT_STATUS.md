@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 9 — Lead conversion — done, awaiting your review/commit (branch `feat/phase-9-lead-conversion`). Next: Phase 10 Pipelines & Deals (only when you ask).
+Phase 10 — Pipelines & Deals — **done (10a, 10b, 10c, 10d)**, awaiting your review/commit (branch `feat/phase-10-pipelines-deals`, one commit per part is suggested below). Next: Phase 11 Tasks & Follow-ups (only when you ask).
 
 ## Completed phases
 
@@ -23,6 +23,11 @@ Phase 9 — Lead conversion — done, awaiting your review/commit (branch `feat/
 - Phase 8a — Leads (CRUD, sources, assignment, rule-based scoring via Strategy, `lead` advisory lock, ADR 0008) ✅ (2026-11-02)
 - Phase 8b — Lead status workflow (`POST /leads/:id/status`, shared `applyStatusTransition` compare-and-set, converted leads final) ✅ (2026-11-02)
 - Phase 9 — Lead conversion (`POST /leads/:id/convert`, one transaction, contact lock, `lead.converted` event, ADR 0008) ✅ (2026-11-02)
+- Phase 10a — Pipelines & stages (CRUD, default switch, stage add/edit/delete/reorder, shared/exclusive pipeline lock, migration `pipeline_stage_terminal_constraints`, ADR 0009) ✅ (2026-11-02) — suggested commit: `feat(pipelines): add pipelines and stages management with shared/exclusive pipeline lock`
+- Phase 10b — Deals CRUD (money as decimal string, shared pipeline/company/contact locks, contact/company delete blocked by OPEN deals, `DEAL_CLOSED`, money-change log) ✅ (2026-11-02) — suggested commit: `feat(deals): add deals CRUD with money fields and contact/company delete blockers`
+- Phase 10c — Stage moves (`POST /deals/:id/move`, `GET /deals/:id/history`, won/lost/reopen, history in the same tx, `deal.stage_changed`, `publishDomainEvent` extraction, predicate transition rule) ✅ (2026-11-02) — suggested commit: `feat(deals): add stage moves with history and won/lost handling`
+- Phase 10d — Optional deal inside lead conversion (`ConvertLeadDto.deal`, lock order lead -> pipeline(shared) -> company|contact, `deals:create` only when a deal is sent) ✅ (2026-11-02) — suggested commit: `feat(leads): create an optional deal during lead conversion`
+- **Phase 10 — Pipelines & Deals ✅ complete**
 
 ## Decisions log
 
@@ -100,13 +105,21 @@ Phase 9 — Lead conversion — done, awaiting your review/commit (branch `feat/
 - **TODO (dedupe):** duplicates are allowed (no uniqueness per the ERD): converting two leads with one email makes two contacts. Add match-by-email on conversion (suggest `contactId`) when a dedupe policy is decided
 - **TODO Phase 10:** deleting a contact that a converted lead (`convertedContactId`) or an open deal references is currently allowed (soft delete); decide block-with-409 vs allow, together with the open-deals/tasks rule above
 
+- 2026-11-02 — 10a (ADR 0009): Won/Lost found by `isWon`/`isLost` markers; exactly one each, always last (service under the exclusive pipeline lock + DB partial unique indexes and CHECK from the new migration). Positions 1..n rewritten in ONE tx under the exclusive lock (no DB unique on position, so no temp values). `acquireLock(tx, kind, id, mode)` has `shared`; `acquireLocks(tx, [..])`; order **org, lead, pipeline, company, contact**. Structure changes exclusive, deal writes (10b-10d) shared. Soft-deleted deals still block pipeline/stage delete (RESTRICT FKs), counted via `withDeleted` after the lock. SALES_MANAGER may create/edit pipelines (conscious, org-wide). Terminal probability is server-fixed. Default template lives in `common/policies/pipeline-policy.ts` (seed + API)
+
+- 2026-11-02 — 10b (ADR 0009): amount optional on create ("0.00"), never null, 0.00 allowed (Phase 14 needs no null handling); amount/currency PATCH logs `deal.money_changed` (old/new, ids). **TODO Phase 13:** audit-log deal amount/currency changes. Contact/company delete blocked only by OPEN live deals (`CONTACT_HAS_OPEN_DEALS`, `COMPANY_HAS_DEALS`), visibility first, no counts; contact referenced by a converted lead stays deletable. `ContactsRepository.deleteVisible` became `softDeleteIfUnused` (outcome union like companies; the 3 old contacts delete unit assertions kept their meaning, only the mock contract changed). `common/tenant/in-locks.util.ts` = shared `inLocks(prisma, locks, work)`; `PipelinesService.defaultPipelineId()/resolvePlacement(db, pipelineId, stageId?)` and `DealsService.createWithin(db, input)` are the tx-aware entry points 10d reuses. `OrganizationsModule` exports `OrganizationsService`
+
+- 2026-11-02 — 10c (ADR 0009): move = any stage of the deal's own pipeline (backwards ok); status follows the stage; Lost needs `lostReason` (400 `LOST_REASON_REQUIRED` / `LOST_REASON_NOT_ALLOWED`); reopen = move to an open stage (clears closedAt + lostReason); same stage = 409 `INVALID_STAGE_MOVE`, lost race = 409 `DEAL_STAGE_CHANGED`. `applyStatusTransition` now accepts a predicate as its rule (`TransitionRule`); the compare-and-set is `stageId = from`; history only after the CAS matched, same tx, under the SHARED pipeline lock. `common/events/publish-domain-event.ts` is the one fire-and-forget publisher (lead conversion uses it, its specs untouched)
+
+- 2026-11-02 — 10d (ADR 0009): `deal` in the conversion body = `PickType(CreateDealDto, title, amount, currency, pipelineId, stageId, expectedCloseDate)`; links + owner derived (contact, that contact's company, lead owner). `DealsService.resolveDefaults(actor, {currency?, pipelineId?})` runs BEFORE the transaction so the pipeline lock can be taken in order; `LeadsRepository.convert` gained an optional 6th arg `{pipelineId}` (passed only with a deal, so the Phase 9 unit assertions on the call shape are unchanged). Old tests touched on purpose: Phase 9 e2e "unknown deal field is rejected" (now: unknown field INSIDE the deal) and the exact response keys (+`deal: null`); the Phase 9 unit spec only got the new constructor argument. **TODO (dedupe, unchanged):** duplicate contacts/companies are allowed
+
 ## Open questions
 
 - None.
 
 ## Next step
 
-Phase 10 — Pipelines & Deals (configurable pipelines/stages, validated stage moves via `applyStatusTransition`, won/lost, stage history; add the optional `deal` to the conversion body and create it inside `LeadsRepository.convert`'s transaction through a DealsService method that takes the tx) — only when you ask.
+Phase 11 — Tasks & Follow-ups (assignment, due dates, priority, overdue detection, reminders via jobs; reuse `applyStatusTransition`, `acquireLock`, visibility; add the task blocker to `ContactsRepository.softDeleteIfUnused` / `CompaniesRepository.softDeleteIfUnused`; `LeadStatusHistory` / audit TODOs stay in Phase 13) — only when you ask.
 
 ## Notes for next session (to save context)
 

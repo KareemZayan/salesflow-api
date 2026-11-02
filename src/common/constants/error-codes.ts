@@ -35,6 +35,31 @@ export const ERROR_CODES = {
   INVALID_CONTACT: 'INVALID_CONTACT',
   // The combination of conversion options is contradictory (ADR 0008).
   INVALID_CONVERSION_OPTIONS: 'INVALID_CONVERSION_OPTIONS',
+  PIPELINE_NAME_ALREADY_EXISTS: 'PIPELINE_NAME_ALREADY_EXISTS',
+  STAGE_NAME_ALREADY_EXISTS: 'STAGE_NAME_ALREADY_EXISTS',
+  PIPELINE_IS_DEFAULT: 'PIPELINE_IS_DEFAULT',
+  // Soft-deleted deals count too: the database refuses to delete a pipeline or stage they point at.
+  PIPELINE_HAS_DEALS: 'PIPELINE_HAS_DEALS',
+  STAGE_IN_USE: 'STAGE_IN_USE',
+  // Won and Lost are mandatory, and a pipeline always keeps at least one open stage.
+  TERMINAL_STAGE_REQUIRED: 'TERMINAL_STAGE_REQUIRED',
+  PIPELINE_NEEDS_OPEN_STAGE: 'PIPELINE_NEEDS_OPEN_STAGE',
+  TERMINAL_STAGE_PROBABILITY_FIXED: 'TERMINAL_STAGE_PROBABILITY_FIXED',
+  INVALID_STAGE_ORDER: 'INVALID_STAGE_ORDER',
+  TOO_MANY_STAGES: 'TOO_MANY_STAGES',
+  // One code each for every reason a deal cannot be placed (missing, other organization, wrong
+  // pipeline, terminal stage), so the answer never confirms that a record exists.
+  INVALID_PIPELINE: 'INVALID_PIPELINE',
+  INVALID_STAGE: 'INVALID_STAGE',
+  // A WON or LOST deal is read-only; reopen it by moving it to an open stage.
+  DEAL_CLOSED: 'DEAL_CLOSED',
+  // Two 409s on a stage move: nothing to do (same stage) vs. the deal moved under the request.
+  INVALID_STAGE_MOVE: 'INVALID_STAGE_MOVE',
+  DEAL_STAGE_CHANGED: 'DEAL_STAGE_CHANGED',
+  LOST_REASON_REQUIRED: 'LOST_REASON_REQUIRED',
+  LOST_REASON_NOT_ALLOWED: 'LOST_REASON_NOT_ALLOWED',
+  CONTACT_HAS_OPEN_DEALS: 'CONTACT_HAS_OPEN_DEALS',
+  COMPANY_HAS_DEALS: 'COMPANY_HAS_DEALS',
   // Two 409s on leads that clients handle differently: the lead is final (CONVERTED) vs. this status
   // change is not possible from the lead's current status.
   LEAD_ALREADY_CONVERTED: 'LEAD_ALREADY_CONVERTED',

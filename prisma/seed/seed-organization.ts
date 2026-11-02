@@ -1,5 +1,9 @@
 import * as argon2 from 'argon2';
 import { DEFAULT_ROLES, PERMISSIONS, ROLE_NAMES } from './permissions';
+import {
+  DEFAULT_PIPELINE_TEMPLATE,
+  buildStageRows,
+} from '../../src/common/policies/pipeline-policy';
 import type { PrismaClient } from './prisma-client';
 
 export interface SeedOrganizationInput {
@@ -21,19 +25,6 @@ export interface SeededOrganization {
   organizationId: string;
   adminId: string;
 }
-
-// Default pipeline stages, in board order. `probability` is the win percentage.
-const DEFAULT_PIPELINE = {
-  name: 'Sales Pipeline',
-  stages: [
-    { name: 'Prospecting', probability: 10 },
-    { name: 'Qualified', probability: 25 },
-    { name: 'Proposal', probability: 50 },
-    { name: 'Negotiation', probability: 75 },
-    { name: 'Won', probability: 100, isWon: true },
-    { name: 'Lost', probability: 0, isLost: true },
-  ],
-} as const;
 
 // Global catalogue, owned by code: re-running refreshes descriptions and adds new keys.
 export async function seedPermissions(prisma: PrismaClient): Promise<void> {
@@ -130,14 +121,11 @@ export async function seedOrganization(
       await tx.pipeline.create({
         data: {
           organizationId: org.id,
-          name: DEFAULT_PIPELINE.name,
+          name: DEFAULT_PIPELINE_TEMPLATE.name,
           isDefault: true,
           stages: {
             // organizationId comes from the parent through the composite FK.
-            create: DEFAULT_PIPELINE.stages.map((stage, index) => ({
-              ...stage,
-              position: index + 1,
-            })),
+            create: buildStageRows(DEFAULT_PIPELINE_TEMPLATE.openStages),
           },
         },
       });

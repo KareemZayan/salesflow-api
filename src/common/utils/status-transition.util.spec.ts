@@ -64,3 +64,28 @@ describe('applyStatusTransition', () => {
     await expect(applyStatusTransition(transition('B'))).rejects.toThrow('not found');
   });
 });
+
+describe('a predicate as the transition rule', () => {
+  const different = (from: string, to: string) => from !== to;
+
+  it('is consulted instead of a map', () => {
+    expect(isTransitionAllowed(different, 'stage-1', 'stage-2')).toBe(true);
+    expect(isTransitionAllowed(different, 'stage-1', 'stage-1')).toBe(false);
+  });
+
+  it('applyStatusTransition rejects without writing when the predicate says no', async () => {
+    read.mockResolvedValue({ status: 'stage-1' });
+    await expect(
+      applyStatusTransition({
+        map: different,
+        to: 'stage-1',
+        read,
+        write,
+        notFound: () => new Error('not found'),
+        rejected: (from: string, target: string) => new Error(`rejected ${from}->${target}`),
+        changedConcurrently: (actual: string) => new Error(`changed ${actual}`),
+      }),
+    ).rejects.toThrow('rejected stage-1->stage-1');
+    expect(write).not.toHaveBeenCalled();
+  });
+});

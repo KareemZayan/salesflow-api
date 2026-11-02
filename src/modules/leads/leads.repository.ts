@@ -198,22 +198,26 @@ export class LeadsRepository {
   //   2. claims the lead with a compare-and-set (`status = from` and the caller's visibility) that
   //      sets CONVERTED and returns the lead's CURRENT data, which is what `work` builds from, not a
   //      copy read earlier,
-  //   3. runs `work` (creating or linking the contact and company through their services, in this
-  //      same transaction), and
-  //   4. records the contact on the lead.
+  //   3. runs `work` (creating or linking the contact, the company and the deal through their
+  //      services, in this same transaction), and
+  //   4. records the contact (and the deal) on the lead.
   // `null` = the claim matched nothing (changed, hidden or deleted meanwhile); nothing was written.
   // Anything `work` throws rolls the whole transaction back, the claim included. The score and the
   // other lead fields are untouched. This method is its own path on purpose: `updateVisible` and
   // `deleteVisible` refuse converted leads.
-  convert<R extends { contactId: string }>(
+  convert<R extends { contactId: string; dealId?: string | null }>(
     scope: VisibilityScope,
     id: string,
     from: LeadStatus,
     link: ConversionLock | undefined,
     work: (tx: TenantTransactionClient, lead: LeadConversionSource) => Promise<R>,
+    // Only when the conversion also creates a deal: its pipeline, locked SHARED right after the
+    // lead and BEFORE the company / contact (order: lead, pipeline, company, contact).
+    deal?: { pipelineId: string },
   ): Promise<{ lead: LeadRecord; outcome: R } | null> {
     return this.prisma.$transaction(async (tx) => {
       await acquireLock(tx, 'lead', id);
+      if (deal) await acquireLock(tx, 'pipeline', deal.pipelineId, 'shared');
       if (link) await acquireLock(tx, link.kind, link.id);
 
       const claimed = await nullIfNotFound(
@@ -228,7 +232,7 @@ export class LeadsRepository {
       const outcome = await work(tx, claimed);
       const lead = await tx.lead.update({
         where: { id },
-        data: { convertedContactId: outcome.contactId },
+        data: { convertedContactId: outcome.contactId, convertedDealId: outcome.dealId ?? null },
         select: leadSelect,
       });
       return { lead, outcome };

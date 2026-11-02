@@ -102,6 +102,13 @@ export class CompaniesService {
       id,
     );
     if (outcome === 'not-found') throw this.notFound();
+    if (outcome === 'has-deals') {
+      throw new DomainException(
+        ERROR_CODES.COMPANY_HAS_DEALS,
+        'Company has open deals and cannot be deleted',
+        HttpStatus.CONFLICT,
+      );
+    }
     if (outcome === 'has-contacts') {
       // No count and no owners: the message must not describe records the caller cannot see.
       throw new DomainException(

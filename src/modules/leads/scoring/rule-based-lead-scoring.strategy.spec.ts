@@ -87,6 +87,15 @@ describe('RuleBasedLeadScoringStrategy', () => {
   });
 });
 
+// ADR 0008: the score describes the lead's attributes, so a status change never recomputes it and
+// needs no lock. If someone adds `status` to the score they must ALSO recompute inside the status
+// compare-and-set, under the lead lock; this failing test is the reminder.
+describe('status and the score', () => {
+  it('status is not a scoring field', () => {
+    expect(SCORING_FIELDS).not.toContain('status');
+  });
+});
+
 describe('computeRuleBasedScore clamp', () => {
   const full = lead({ source: LeadSource.REFERRAL, email: 'a@b.co', phone: '1', companyName: 'x' });
 

@@ -31,6 +31,10 @@ export const ERROR_CODES = {
   // One code for every reason a company cannot be linked (missing, deleted, other organization, not
   // visible to the caller), so the answer never confirms that a company exists.
   INVALID_COMPANY: 'INVALID_COMPANY',
+  // Two 409s on leads that clients handle differently: the lead is final (CONVERTED) vs. this status
+  // change is not possible from the lead's current status.
+  LEAD_ALREADY_CONVERTED: 'LEAD_ALREADY_CONVERTED',
+  INVALID_STATUS_TRANSITION: 'INVALID_STATUS_TRANSITION',
   ROLE_NAME_ALREADY_EXISTS: 'ROLE_NAME_ALREADY_EXISTS',
   ROLE_NAME_RESERVED: 'ROLE_NAME_RESERVED',
   ROLE_IN_USE: 'ROLE_IN_USE',

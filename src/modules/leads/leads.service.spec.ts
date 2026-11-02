@@ -13,6 +13,7 @@ const repository = {
   create: vi.fn(),
   updateVisible: vi.fn(),
   deleteVisible: vi.fn(),
+  transitionStatus: vi.fn(),
 };
 const ownership = { resolve: vi.fn(), resolveAssignableOwner: vi.fn() };
 const scoring = { score: vi.fn() };
@@ -257,5 +258,127 @@ describe('LeadsService.update', () => {
       expect(ownership.resolveAssignableOwner).toHaveBeenCalledWith(scope, 'other');
       expect(repository.updateVisible).not.toHaveBeenCalled();
     });
+  });
+});
+
+const converted = () => lead({ status: LeadStatus.CONVERTED });
+const code = (res: { body: string }) => (JSON.parse(res.body) as { code: string }).code;
+
+describe('LeadsService.changeStatus', () => {
+  it('writes with the status it just READ as `from`, and returns the written lead', async () => {
+    repository.findVisible.mockResolvedValue(lead({ status: LeadStatus.NEW }));
+    repository.transitionStatus.mockResolvedValue(lead({ status: LeadStatus.CONTACTED }));
+    const result = await service.changeStatus(actor, 'l1', { status: LeadStatus.CONTACTED });
+    expect(result.status).toBe(LeadStatus.CONTACTED);
+    expect(repository.transitionStatus).toHaveBeenCalledWith(
+      scope,
+      'l1',
+      LeadStatus.NEW,
+      LeadStatus.CONTACTED,
+    );
+    expect(scoring.score).not.toHaveBeenCalled();
+  });
+
+  it('404 when the lead is not visible; nothing is written', async () => {
+    repository.findVisible.mockResolvedValue(null);
+    const res = await failure(service.changeStatus(actor, 'l1', { status: LeadStatus.CONTACTED }));
+    expect(res.status).toBe(404);
+    expect(repository.transitionStatus).not.toHaveBeenCalled();
+  });
+
+  it('409 INVALID_STATUS_TRANSITION for a move the map forbids, including the same status', async () => {
+    repository.findVisible.mockResolvedValue(lead({ status: LeadStatus.NEW }));
+    for (const status of [LeadStatus.QUALIFIED, LeadStatus.NEW]) {
+      const res = await failure(service.changeStatus(actor, 'l1', { status }));
+      expect(res.status).toBe(409);
+      expect(code(res)).toBe('INVALID_STATUS_TRANSITION');
+    }
+    expect(repository.transitionStatus).not.toHaveBeenCalled();
+  });
+
+  it('409 LEAD_ALREADY_CONVERTED from a converted lead', async () => {
+    repository.findVisible.mockResolvedValue(converted());
+    const res = await failure(service.changeStatus(actor, 'l1', { status: LeadStatus.CONTACTED }));
+    expect(res.status).toBe(409);
+    expect(code(res)).toBe('LEAD_ALREADY_CONVERTED');
+  });
+
+  describe('when the compare-and-set loses a race', () => {
+    beforeEach(() => {
+      repository.transitionStatus.mockResolvedValue(null);
+    });
+
+    it('409 INVALID_STATUS_TRANSITION when the status moved on', async () => {
+      repository.findVisible
+        .mockResolvedValueOnce(lead({ status: LeadStatus.NEW }))
+        .mockResolvedValueOnce(lead({ status: LeadStatus.UNQUALIFIED }));
+      const res = await failure(
+        service.changeStatus(actor, 'l1', { status: LeadStatus.CONTACTED }),
+      );
+      expect(res.status).toBe(409);
+      expect(code(res)).toBe('INVALID_STATUS_TRANSITION');
+    });
+
+    it('409 LEAD_ALREADY_CONVERTED when it was converted meanwhile', async () => {
+      repository.findVisible
+        .mockResolvedValueOnce(lead({ status: LeadStatus.QUALIFIED }))
+        .mockResolvedValueOnce(converted());
+      const res = await failure(
+        service.changeStatus(actor, 'l1', { status: LeadStatus.UNQUALIFIED }),
+      );
+      expect(code(res)).toBe('LEAD_ALREADY_CONVERTED');
+    });
+
+    it('404 when it became invisible meanwhile (reassigned away or deleted)', async () => {
+      repository.findVisible
+        .mockResolvedValueOnce(lead({ status: LeadStatus.NEW }))
+        .mockResolvedValueOnce(null);
+      const res = await failure(
+        service.changeStatus(actor, 'l1', { status: LeadStatus.CONTACTED }),
+      );
+      expect(res.status).toBe(404);
+    });
+  });
+});
+
+describe('converted leads are final', () => {
+  it('update: a write that matched nothing on a visible converted lead is 409, not 404', async () => {
+    repository.updateVisible.mockResolvedValue(null);
+    repository.findVisible.mockResolvedValue(converted());
+    const res = await failure(service.update(actor, 'l1', { notes: 'x' }));
+    expect(res.status).toBe(409);
+    expect(code(res)).toBe('LEAD_ALREADY_CONVERTED');
+  });
+
+  it('update: a write that matched nothing on an invisible lead is 404 (never reveals it)', async () => {
+    repository.updateVisible.mockResolvedValue(null);
+    repository.findVisible.mockResolvedValue(null);
+    expect(await failure(service.update(actor, 'l1', { notes: 'x' }))).toMatchObject({
+      status: 404,
+    });
+  });
+
+  it('update: an empty body is 400 before the converted 409 is even considered', async () => {
+    const res = await failure(service.update(actor, 'l1', {}));
+    expect(res.status).toBe(400);
+    expect(code(res)).toBe('EMPTY_UPDATE');
+    expect(repository.findVisible).not.toHaveBeenCalled();
+    expect(repository.updateVisible).not.toHaveBeenCalled();
+  });
+
+  it('update: an owner transfer of a converted lead is 409 before the new owner is judged', async () => {
+    repository.findVisible.mockResolvedValue(converted());
+    const res = await failure(service.update(actor, 'l1', { ownerId: 'r1' }));
+    expect(code(res)).toBe('LEAD_ALREADY_CONVERTED');
+    expect(ownership.resolveAssignableOwner).not.toHaveBeenCalled();
+    expect(repository.updateVisible).not.toHaveBeenCalled();
+  });
+
+  it('delete: 409 for a visible converted lead, 404 otherwise', async () => {
+    repository.deleteVisible.mockResolvedValue(false);
+    repository.findVisible.mockResolvedValueOnce(converted());
+    expect(code(await failure(service.delete(actor, 'l1')))).toBe('LEAD_ALREADY_CONVERTED');
+    repository.findVisible.mockResolvedValueOnce(null);
+    expect(await failure(service.delete(actor, 'l1'))).toMatchObject({ status: 404 });
   });
 });

@@ -13,6 +13,7 @@ import {
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
   ApiNoContentResponse,
@@ -27,6 +28,7 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 import { IdParamDto } from '../../common/dto/id-param.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ChangeLeadStatusDto } from './dto/change-lead-status.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { LeadResponseDto } from './dto/lead-response.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
@@ -105,12 +107,46 @@ export class LeadsController {
   @ApiBadRequestResponse({ description: 'VALIDATION_FAILED, EMPTY_UPDATE or INVALID_OWNER' })
   @ApiForbiddenResponse({ description: 'FORBIDDEN (missing leads:update)' })
   @ApiNotFoundResponse({ description: 'RESOURCE_NOT_FOUND' })
+  @ApiConflictResponse({ description: 'LEAD_ALREADY_CONVERTED (a converted lead is read-only)' })
   update(
     @CurrentUser() actor: AuthenticatedUser,
     @Param() { id }: IdParamDto,
     @Body() dto: UpdateLeadDto,
   ): Promise<LeadResponseDto> {
     return this.leads.update(actor, id, dto);
+  }
+
+  @Post(':id/status')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('leads:update')
+  @ApiOperation({
+    summary: 'Change a lead status',
+    description:
+      'Allowed moves: NEW to CONTACTED or UNQUALIFIED; CONTACTED to QUALIFIED or UNQUALIFIED; ' +
+      'QUALIFIED to UNQUALIFIED; UNQUALIFIED back to CONTACTED (reopen). CONVERTED is set only by ' +
+      'lead conversion and cannot be requested. The move is computed from the status the server ' +
+      'reads, so only the target is sent. The score does not depend on the status and is not ' +
+      'changed. The change is not idempotent: asking for the status the lead already has, or ' +
+      'retrying a change that was already applied, answers 409 INVALID_STATUS_TRANSITION. After a ' +
+      '409, GET the lead to see its current status.',
+  })
+  @ApiOkResponse({ type: LeadResponseDto })
+  @ApiBadRequestResponse({
+    description: 'VALIDATION_FAILED (unknown status, CONVERTED, or any field besides `status`)',
+  })
+  @ApiForbiddenResponse({ description: 'FORBIDDEN (missing leads:update)' })
+  @ApiNotFoundResponse({ description: 'RESOURCE_NOT_FOUND' })
+  @ApiConflictResponse({
+    description:
+      'INVALID_STATUS_TRANSITION (this move is not possible from the current status, or the ' +
+      'status changed in the meantime) or LEAD_ALREADY_CONVERTED (the lead is final)',
+  })
+  changeStatus(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param() { id }: IdParamDto,
+    @Body() dto: ChangeLeadStatusDto,
+  ): Promise<LeadResponseDto> {
+    return this.leads.changeStatus(actor, id, dto);
   }
 
   @Delete(':id')
@@ -120,6 +156,9 @@ export class LeadsController {
   @ApiNoContentResponse()
   @ApiForbiddenResponse({ description: 'FORBIDDEN (missing leads:delete)' })
   @ApiNotFoundResponse({ description: 'RESOURCE_NOT_FOUND (also when already deleted)' })
+  @ApiConflictResponse({
+    description: 'LEAD_ALREADY_CONVERTED (a converted lead cannot be deleted)',
+  })
   delete(@CurrentUser() actor: AuthenticatedUser, @Param() { id }: IdParamDto): Promise<void> {
     return this.leads.delete(actor, id);
   }

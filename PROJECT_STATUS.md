@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 8b — Lead status workflow — done, awaiting your review/commit (branch `feat/phase-8b-lead-status`). Next: Phase 9 Lead conversion (only when you ask).
+Phase 9 — Lead conversion — done, awaiting your review/commit (branch `feat/phase-9-lead-conversion`). Next: Phase 10 Pipelines & Deals (only when you ask).
 
 ## Completed phases
 
@@ -22,6 +22,7 @@ Phase 8b — Lead status workflow — done, awaiting your review/commit (branch 
 - Phase 7b — Contacts (CRUD, company link under the company lock, `INVALID_COMPANY`, shared helpers extracted from Companies) ✅ (2026-11-02)
 - Phase 8a — Leads (CRUD, sources, assignment, rule-based scoring via Strategy, `lead` advisory lock, ADR 0008) ✅ (2026-11-02)
 - Phase 8b — Lead status workflow (`POST /leads/:id/status`, shared `applyStatusTransition` compare-and-set, converted leads final) ✅ (2026-11-02)
+- Phase 9 — Lead conversion (`POST /leads/:id/convert`, one transaction, contact lock, `lead.converted` event, ADR 0008) ✅ (2026-11-02)
 
 ## Decisions log
 
@@ -93,13 +94,19 @@ Phase 8b — Lead status workflow — done, awaiting your review/commit (branch 
 - **TODO Phase 10/11:** decide what open deals / tasks mean for deleting a contact (block with 409? unlink?) and add the check to `ContactsRepository.deleteVisible`
 - **Follow-up (any time):** Users / Roles / Organizations still build their own RESOURCE_NOT_FOUND; move them to `resourceNotFound(entity)`
 
+- 2026-11-02 — 9 design in ADR 0008: convert from **QUALIFIED only** (upgrade path: add CONVERTED to CONTACTED in `lead-conversion-transitions.ts`). Body `{contactId?, companyId?, createCompany?}`; contradictory combinations = `400 INVALID_CONVERSION_OPTIONS` (the body never "wins"); a lead has no companyId, only text `companyName`. `contactId` links an existing contact and NEVER modifies it. New records belong to the LEAD owner (`ownerForCreate`). Permissions follow what happens: contacts:create only if a contact is created, companies:create only if a company is created, `leads:convert` alone to link an existing contact. No `deal` field (400); Phase 10 adds it inside the same tx
+- 2026-11-02 — Conversion = `LeadConversionService` (cross-module, via services with tx-aware `createWithin` / `assertLinkable`) + `LeadsRepository.convert` (lead lock -> company|contact lock -> claim CAS that returns the CURRENT lead data -> work -> set convertedContactId). Lock order is now **org, lead, company, contact**; `ContactsRepository.deleteVisible` takes the `contact` lock (now a tx). Score untouched (sentinel test)
+- 2026-11-02 — `lead.converted` (`@nestjs/event-emitter` 3, `EventEmitterModule.forRoot()`): ids + organizationId only, emitted after the commit via `emitAsync`, sync and async listener failures are caught + logged. **Known gap:** lost if the process dies between commit and emit; Phase 12 (BullMQ/outbox) closes it
+- **TODO (dedupe):** duplicates are allowed (no uniqueness per the ERD): converting two leads with one email makes two contacts. Add match-by-email on conversion (suggest `contactId`) when a dedupe policy is decided
+- **TODO Phase 10:** deleting a contact that a converted lead (`convertedContactId`) or an open deal references is currently allowed (soft delete); decide block-with-409 vs allow, together with the open-deals/tasks rule above
+
 ## Open questions
 
 - None.
 
 ## Next step
 
-Phase 9 — Lead conversion (one transaction: create/link Contact (+ Company), optional Deal, set status CONVERTED + convertedAt/ContactId/DealId via a new repository method; takes the lead lock FIRST, then the company lock; emits `lead.converted`; uses `leads:convert`) — only when you ask.
+Phase 10 — Pipelines & Deals (configurable pipelines/stages, validated stage moves via `applyStatusTransition`, won/lost, stage history; add the optional `deal` to the conversion body and create it inside `LeadsRepository.convert`'s transaction through a DealsService method that takes the tx) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -130,6 +137,7 @@ Phase 9 — Lead conversion (one transaction: create/link Contact (+ Company), o
 - Contacts (7b): `modules/contacts` follows the Companies template; `CompaniesModule` now exports `CompaniesService` (`assertLinkable`). `ContactsRepository.inCompanyLock` is the only place that takes the company lock for linking; any new entity that links to a company must do the same (ADR 0007). Race e2e tests loop 20x and were verified to fail when the lock is removed.
 - Leads (8a): `modules/leads` (Companies/Contacts template) + `scoring/` (`LeadScoringStrategy` interface + `LEAD_SCORING_STRATEGY` token in `lead-scoring.strategy.ts`, weights in `lead-scoring.constants.ts`, `computeRuleBasedScore(input, weights)` pure fn so tests can try other weights). `LeadsRepository.updateVisible(scope,id,changes,rescore?)`: `rescore` present => lead lock + tx. Responses carry `status` (always NEW until 8b) and the read-only conversion fields. `LeadsModule` exports nothing. `test/factories/crm.factory.ts` has `createLead`. List filters: `status`, `source`, `ownerId`, `q`; sort includes `score`.
 - Leads (8b): `LeadsService.changeStatus` = `applyStatusTransition` (common). `LeadsRepository`: `notConverted` is in the where of `updateVisible` (also its in-tx scoring read) and `deleteVisible`; `transitionStatus(scope,id,from,to)` is the CAS. The service answers misses through `whyNotEditable` (visibility re-read). Phase 9 conversion must set `status=CONVERTED` with the lead lock held (the CAS `status = from` then rejects any status change racing with it) and must also be excluded from the `notConverted` guard by being its own method.
+- Conversion (9): `modules/leads/lead-conversion.service.ts` + `LeadsRepository.convert`; `ContactsService` / `CompaniesService` now export `createWithin(db, data)` and `assertLinkable` (contacts: INVALID_CONTACT). `ContactsModule` and `CompaniesModule` both export their service. Race e2e loops only prove invariants; the deterministic `locks` describe in `test/e2e/lead-conversion.e2e-spec.ts` is what fails when a lock is removed (verified by mutation for the conversion link lock and the contact-delete lock). `contact.deleteMany()` in tests fails once a lead references the contact (Restrict FK): count deltas instead.
 - Python is not installed on this machine; use Edit/Write or shell tools for scripted edits. Bash heredocs containing `'` inside test code failed once: use the Write tool for big files.
 - `acquireOrgLock` no longer exists; use `acquireLock(tx, 'org', id)`. ADRs 0004 and 0005 still name the old function (historical).
 

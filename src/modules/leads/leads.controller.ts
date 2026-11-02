@@ -28,18 +28,24 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 import { IdParamDto } from '../../common/dto/id-param.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ConvertLeadDto } from './dto/convert-lead.dto';
+import { ConvertLeadResponseDto } from './dto/convert-lead-response.dto';
 import { ChangeLeadStatusDto } from './dto/change-lead-status.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { LeadResponseDto } from './dto/lead-response.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
+import { LeadConversionService } from './lead-conversion.service';
 import { LeadsService } from './leads.service';
 
 @ApiTags('Leads')
 @ApiBearerAuth()
 @Controller('leads')
 export class LeadsController {
-  constructor(private readonly leads: LeadsService) {}
+  constructor(
+    private readonly leads: LeadsService,
+    private readonly conversion: LeadConversionService,
+  ) {}
 
   @Get()
   @Permissions('leads:read')
@@ -147,6 +153,44 @@ export class LeadsController {
     @Body() dto: ChangeLeadStatusDto,
   ): Promise<LeadResponseDto> {
     return this.leads.changeStatus(actor, id, dto);
+  }
+
+  @Post(':id/convert')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('leads:convert')
+  @ApiOperation({
+    summary: 'Convert a QUALIFIED lead into a contact (and optionally a company)',
+    description:
+      'One transaction: creates a contact from the lead (or links an existing one with ' +
+      '`contactId`, which is never modified), optionally creates (`createCompany`) or links ' +
+      '(`companyId`) a company for a NEW contact, and marks the lead CONVERTED. New records are ' +
+      'owned by the lead owner. The score is unchanged. Conflicting options are rejected: ' +
+      '`contactId` excludes the other two, and `companyId` excludes `createCompany`. Creating a ' +
+      'contact also needs contacts:create and `createCompany` needs companies:create; linking an ' +
+      'existing contact needs only leads:convert. A `lead.converted` event follows the commit. ' +
+      'Deals are not part of conversion yet: a `deal` field is rejected.',
+  })
+  @ApiOkResponse({ type: ConvertLeadResponseDto })
+  @ApiBadRequestResponse({
+    description:
+      'VALIDATION_FAILED, INVALID_CONVERSION_OPTIONS, INVALID_CONTACT, INVALID_COMPANY or INVALID_OWNER',
+  })
+  @ApiForbiddenResponse({
+    description:
+      'FORBIDDEN (missing leads:convert, or contacts:create / companies:create for what would be created)',
+  })
+  @ApiNotFoundResponse({ description: 'RESOURCE_NOT_FOUND' })
+  @ApiConflictResponse({
+    description:
+      'LEAD_ALREADY_CONVERTED, or INVALID_STATUS_TRANSITION (the lead is not QUALIFIED, or its ' +
+      'status changed in the meantime)',
+  })
+  convert(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param() { id }: IdParamDto,
+    @Body() dto: ConvertLeadDto,
+  ): Promise<ConvertLeadResponseDto> {
+    return this.conversion.convert(actor, id, dto);
   }
 
   @Delete(':id')

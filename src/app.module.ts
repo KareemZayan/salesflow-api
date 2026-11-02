@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { CommonModule } from './common/common.module';
 import { appConfig } from './config/app.config';
 import { validateEnv } from './config/validate-env';
@@ -22,6 +23,7 @@ import { UsersModule } from './modules/users/users.module';
       load: [appConfig],
       validate: validateEnv,
     }),
+    EventEmitterModule.forRoot(),
     CommonModule,
     LoggerModule,
     PrismaModule,

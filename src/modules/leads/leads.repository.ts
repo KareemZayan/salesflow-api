@@ -42,7 +42,26 @@ const scoringSelect = Object.fromEntries(SCORING_FIELDS.map((field) => [field, t
   true
 >;
 
+// What a new contact and company are built from, read as part of the claim.
+const conversionSourceSelect = {
+  ownerId: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+  phone: true,
+  companyName: true,
+} satisfies Prisma.LeadSelect;
+
 export type LeadRecord = Prisma.LeadGetPayload<{ select: typeof leadSelect }>;
+export type LeadConversionSource = Prisma.LeadGetPayload<{
+  select: typeof conversionSourceSelect;
+}>;
+
+// The record a conversion links to, locked for the duration of the transaction.
+export interface ConversionLock {
+  kind: 'company' | 'contact';
+  id: string;
+}
 
 export type NewLeadData = Pick<
   Prisma.LeadUncheckedCreateInput,
@@ -171,6 +190,49 @@ export class LeadsRepository {
         select: leadSelect,
       }),
     );
+  }
+
+  // The conversion: ONE transaction that
+  //   1. takes the lead lock (then the lock of the company or contact being linked, in the order
+  //      documented in advisory-lock.ts),
+  //   2. claims the lead with a compare-and-set (`status = from` and the caller's visibility) that
+  //      sets CONVERTED and returns the lead's CURRENT data, which is what `work` builds from, not a
+  //      copy read earlier,
+  //   3. runs `work` (creating or linking the contact and company through their services, in this
+  //      same transaction), and
+  //   4. records the contact on the lead.
+  // `null` = the claim matched nothing (changed, hidden or deleted meanwhile); nothing was written.
+  // Anything `work` throws rolls the whole transaction back, the claim included. The score and the
+  // other lead fields are untouched. This method is its own path on purpose: `updateVisible` and
+  // `deleteVisible` refuse converted leads.
+  convert<R extends { contactId: string }>(
+    scope: VisibilityScope,
+    id: string,
+    from: LeadStatus,
+    link: ConversionLock | undefined,
+    work: (tx: TenantTransactionClient, lead: LeadConversionSource) => Promise<R>,
+  ): Promise<{ lead: LeadRecord; outcome: R } | null> {
+    return this.prisma.$transaction(async (tx) => {
+      await acquireLock(tx, 'lead', id);
+      if (link) await acquireLock(tx, link.kind, link.id);
+
+      const claimed = await nullIfNotFound(
+        tx.lead.update({
+          where: { id, status: from, ...applyVisibility<Prisma.LeadWhereInput>(undefined, scope) },
+          data: { status: LeadStatus.CONVERTED, convertedAt: new Date() },
+          select: conversionSourceSelect,
+        }),
+      );
+      if (!claimed) return null;
+
+      const outcome = await work(tx, claimed);
+      const lead = await tx.lead.update({
+        where: { id },
+        data: { convertedContactId: outcome.contactId },
+        select: leadSelect,
+      });
+      return { lead, outcome };
+    });
   }
 
   // Soft delete (the tenant client turns `delete` into setting `deletedAt`). `false` = nothing

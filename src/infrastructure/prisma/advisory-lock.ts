@@ -11,9 +11,9 @@ import { Prisma } from '../../generated/prisma/client';
 // generalised, so locks taken by older code paths still exclude each other.
 //
 // Lock ordering: take ONE lock per transaction. If a flow ever needs two, take them in this order:
-// 'org', then 'lead', then 'company', so two transactions can never wait on each other. (Lead
-// conversion, Phase 9, locks the lead first and then the company it links or creates.)
-export type LockKind = 'org' | 'lead' | 'company';
+// 'org', then 'lead', then 'company', then 'contact', so two transactions can never wait on each
+// other. (Lead conversion locks the lead first, then the company or the contact it links.)
+export type LockKind = 'org' | 'lead' | 'company' | 'contact';
 
 export async function acquireLock(
   tx: Pick<Prisma.TransactionClient, '$executeRaw'>,

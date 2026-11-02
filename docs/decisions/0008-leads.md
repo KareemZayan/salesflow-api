@@ -133,8 +133,75 @@ the client whether to freeze the record or just refresh it.
 Phase 13 (Activities and Audit logs), which will record it from a `lead.status_changed` domain event;
 adding a table now would duplicate that. Until then `updatedAt` is the only trace.
 
-## Prepared for Phase 9 (nothing built yet)
+## Phase 9: lead conversion
 
-The response exposes `convertedAt`, `convertedContactId` and `convertedDealId` read-only; no DTO can
-write them. The `leads:convert` permission already exists in the seed. Conversion will add a
-repository method that sets them inside its own transaction; `LeadsModule` exports nothing yet.
+`POST /leads/:id/convert` (`leads:convert`). Body, all optional: `contactId`, `companyId`,
+`createCompany`. Response: `{ lead, contact, createdCompany }`. Code: `LeadConversionService`
+(orchestration across modules, through their SERVICES) and `LeadsRepository.convert` (transaction,
+locks, claim).
+
+### One transaction
+
+1. `applyStatusTransition` (shared helper) reads the lead with visibility and checks
+   `LEAD_CONVERSION_TRANSITIONS`: **only `QUALIFIED` converts.** Upgrade path: allow `CONTACTED` by
+   adding `CONVERTED` to that entry. Other statuses answer `409 INVALID_STATUS_TRANSITION`, a
+   converted lead `409 LEAD_ALREADY_CONVERTED`.
+2. `LeadsRepository.convert`: lead lock, then the lock of the company or contact being linked
+   (order **org, lead, company, contact**, `advisory-lock.ts`), then the **claim**: one conditional
+   update (`status = QUALIFIED` + visibility) that sets `CONVERTED` and `convertedAt` and returns the
+   lead's CURRENT data. The new records are built from that, never from the earlier read.
+3. The service's `work` creates or links the records through `ContactsService` / `CompaniesService`
+   methods that take the transaction (`createWithin`, `assertLinkable`), then the contact id is
+   written to the lead. Anything that throws rolls everything back, the claim included.
+4. After the commit: `lead.converted` is emitted.
+
+### Options (a lead has no `companyId`, only free-text `companyName`)
+
+| Body                          | Result                                                                                                                             |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `{}`                          | New contact from the lead (name, email, phone), no company. `companyName` stays text.                                              |
+| `companyId`                   | New contact under that existing company (visible to the caller, checked under the company lock; else `400 INVALID_COMPANY`)        |
+| `createCompany: true`         | New company named after `companyName`, new contact under it. Lead without a company name: `400`                                    |
+| `contactId`                   | Existing contact linked as it is: **never modified** by lead data (visible and live, else `400 INVALID_CONTACT`)                   |
+| any contradictory combination | `400 INVALID_CONVERSION_OPTIONS`; the body never "wins": `contactId` excludes the other two, `companyId` excludes `createCompany`  |
+| `deal` or any unknown field   | `400 VALIDATION_FAILED` (Deals arrive in Phase 10, which adds an optional `deal` and calls `DealsService` inside this transaction) |
+
+New contacts and companies belong to the **lead's owner**, not to the caller (a manager converting a
+rep's lead does not take the records). That goes through `ownerForCreate`, so an inactive owner is
+`400 INVALID_OWNER` (reassign the lead first). The score and every other lead field are untouched.
+
+### Permissions follow what happens
+
+`leads:convert` always; `contacts:create` only when a contact is created; `companies:create` only
+when a company is created. Linking an existing contact needs `leads:convert` alone. The extra
+checks run in the service (403 `FORBIDDEN`, before anything is read or written).
+
+### The contact lock
+
+Linking an existing contact is "check, then write". Without a lock a contact could be deleted
+between the check and the write, leaving a CONVERTED (final) lead pointing at a deleted contact. So
+the conversion holds `'contact'` while it checks and links, and `ContactsRepository.deleteVisible`
+takes the same lock. Whoever is second sees the first: a delete that wins makes the conversion
+answer `400 INVALID_CONTACT` (nothing written); a conversion that wins links a live contact, which
+may then be deleted like any contact (a normal later deletion; Phase 10 decides whether open
+deals/leads block it, see the TODO in PROJECT_STATUS).
+
+### Event `lead.converted`
+
+Payload: `organizationId, leadId, contactId, companyId, dealId (null until Phase 10), ownerId,
+actorId, convertedAt`. Ids and the tenant only, no personal data; listeners load details through the
+owning services. It is emitted after the commit and never inside the transaction. A listener that
+throws (synchronously or by rejecting) is caught, logged with the lead id, and never reaches the
+caller.
+
+**Known gap:** the event is in-process and emitted after the commit. If the process dies between the
+commit and the emit, the event is lost and the lead stays converted with no follow-up. Phase 12
+(BullMQ, with an outbox row written in the same transaction if exactly-once matters) closes it.
+
+### Limitations
+
+- **Duplicates are allowed.** The ERD has no uniqueness on contact or company email/name, so
+  converting two leads with the same email creates two contacts. A dedupe step (match by email on
+  conversion, suggest `contactId`) is a TODO in PROJECT_STATUS.
+- `LeadStatusHistory` is still deferred to Phase 13: the conversion is traceable through
+  `convertedAt` / `convertedContactId` only.

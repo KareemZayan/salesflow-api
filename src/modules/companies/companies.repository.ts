@@ -85,6 +85,14 @@ export class CompaniesRepository {
     return this.prisma.company.create({ data, select: companySelect });
   }
 
+  // For callers that already run a transaction (lead conversion).
+  createWithin(
+    db: Pick<TenantTransactionClient, 'company'>,
+    data: NewCompanyData,
+  ): Promise<CompanyRecord> {
+    return db.company.create({ data, select: companySelect });
+  }
+
   // `null` = no such company for this caller (missing, deleted, other tenant, or not visible, or it
   // was reassigned away from the caller after they loaded it). The caller answers 404 for all.
   async updateVisible(

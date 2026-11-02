@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 6b — Users — done, awaiting your review/commit (Phase 6 is split: 6a Auth core ✅, 6b Users, 6c Roles + visibility, 6d Organizations)
+Phase 6c — Roles API + OwnershipScopeService — done, awaiting your review/commit (Phase 6 is split: 6a Auth core ✅, 6b Users ✅, 6c Roles + visibility, 6d Organizations)
 
 ## Completed phases
 
@@ -14,6 +14,8 @@ Phase 6b — Users — done, awaiting your review/commit (Phase 6 is split: 6a A
 - Phase 5 — Common layer (filter, pagination, decorators, tenant context, Prisma scoping extension) ✅ (2026-10-31)
 - Phase 6a — Auth core (login/refresh/logout/me/change-password, JWT strategy, global guards, throttling, helmet, mustChangePassword migration) ✅ (2026-10-31)
 - Phase 6b — Users (admin CRUD, deactivate/reactivate, manager assignment, admin reset-password, org advisory lock, SessionRevoker) ✅ (2026-10-31)
+
+- Phase 6c — Roles API + OwnershipScopeService (own/team/all), role-assignment escalation fix in Users, seed no longer re-grants trimmed permissions ✅ (2026-11-01)
 
 ## Decisions log
 
@@ -57,13 +59,18 @@ Phase 6b — Users — done, awaiting your review/commit (Phase 6 is split: 6a A
 - 2026-10-31 — `SessionRevoker` (exported by AuthModule, takes a tx client) is the single "revoke all refresh tokens of a user"; AuthRepository.replacePassword now uses it. SALES_MANAGER has users:read, so managers see ALL org users read-only
 - 2026-10-31 — pino redact paths extracted to `LOG_REDACT_PATHS` (password, temporaryPassword, newPassword, currentPassword, passwordHash, refreshToken + authorization/cookie) with a spec
 
+- 2026-11-01 — 6c design in ADR 0005: `assertMayGrant` (common/utils) is the single escalation rule, used by Roles (create/edit/delete) and Users (role assignment; closes the 6b gap). System roles are identified by `isSystem` + reserved names (ADMIN frozen; other system roles: permissions editable, no rename/delete). Role names: trimmed, max 50, case-insensitive unique under the org lock (P2002 backstop). ROLE_IN_USE counts inactive users. List uses `_count` (no N+1). Permission replace = deleteMany + createMany in one tx under the lock
+- 2026-11-01 — Seed grants default permissions only when it CREATES a system role; only ADMIN is synced with the full catalogue (a re-run no longer restores permissions an admin removed from SALES_MANAGER / SALES_REP)
+- 2026-11-01 — Visibility: ADMIN all, SALES_MANAGER own + direct reports (inactive reports included), every other role own-only (fail closed; upgrade path = future Role.visibilityScope column + migration). Per-request CLS cache only; `resolve(undefined)` throws 401. `applyVisibility` ANDs with the caller's where; ownerless records are admin-only until Phase 8 decides
+- 2026-11-01 — `GET /permissions` is intentionally unpaginated (fixed global catalogue, ~34 rows)
+
 ## Open questions
 
 - None.
 
 ## Next step
 
-Phase 6c — Roles + visibility (OwnershipScopeService, roles/permissions endpoints; reuse acquireOrgLock) — only when you ask.
+Phase 6d — Organizations (onboarding per the ERD decision: idempotent CLI script, no public registration; org status/profile) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -84,7 +91,8 @@ Phase 6c — Roles + visibility (OwnershipScopeService, roles/permissions endpoi
 - Auth: `modules/auth` (AuthRepository uses the unscoped PrismaService on purpose). Guards live in `common/guards` and are registered in order in `CommonModule` (Throttler → JwtAuth → PasswordChangeRequired → Roles → Permissions). `@Public`, `@Roles` (any-of), `@Permissions` (all-of), `@AuthThrottle`, `@AllowWhenPasswordChangeRequired` exist. `@Audit()` is Phase 13. `PasswordService` is exported by AuthModule for the Users module (6b).
 - E2E helpers: `test/factories` (resetDatabase, createOrganization via the real seedOrganization, createUser), `test/setup/create-test-app.ts`, `test/support/probe.controller.ts` (test-only @Roles/@Permissions routes).
 - Phase 13 TODO: audit-log user.deactivated / user.password_reset / user.role_changed (6b only emits structured log events with ids). Last-active-ADMIN is only reachable via a race through the API (self-removal blocked, non-admins cannot touch admins), so it is covered by the concurrent e2e test + unit tests.
-- 6c TODO: OwnershipScopeService in an exported `common/visibility` module (rep = own, manager = own + direct reports via managerId, admin = all; load report ids once per request, cache in CLS). 6b/6c need their own tenant-isolation tests.
+- Visibility (6c): `common/visibility` (`VisibilityModule` exports `OwnershipScopeService`; helpers `ownerWhere`, `applyVisibility`, `assertVisible`). Feature modules import `VisibilityModule`, call `resolve(actor)` once, then `applyVisibility(where, scope, 'ownerId')`. Not wired into any feature yet (Phase 7 is the first consumer); e2e uses the test-only probe controller, and `createTestApp` imports `VisibilityModule` for it.
+- Roles (6c): `modules/roles` (RolesController + PermissionsController). Any new role-assignment code must call `assertMayGrant`; role writes go through `RolesRepository.withOrgLock`.
 - Phase 12 TODO: scheduled cleanup job for expired/revoked RefreshToken rows (they accumulate until then).
 - Git: working-tree files are LF (prettier) while git normalizes to CRLF on commit; `git status` shows many "M" files with no content diff. `pnpm-lock.yaml` was rewritten by pnpm 11.28 (large diff) — check it before committing.
 - Integration tests (`pnpm test:integration`) cover the scoping extension against real Postgres; use the same pattern for module isolation tests.

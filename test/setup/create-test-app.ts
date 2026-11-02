@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/app.setup';
+import { VisibilityModule } from '../../src/common/visibility/visibility.module';
 import { ProbeController } from '../support/probe.controller';
 import { assertTestDatabase } from './test-database';
 
@@ -11,7 +12,7 @@ import { assertTestDatabase } from './test-database';
 export async function createTestApp(): Promise<INestApplication> {
   process.env.DATABASE_URL = assertTestDatabase(process.env.TEST_DATABASE_URL);
   const moduleRef = await Test.createTestingModule({
-    imports: [AppModule],
+    imports: [AppModule, VisibilityModule],
     controllers: [ProbeController],
   }).compile();
   const app = moduleRef.createNestApplication();

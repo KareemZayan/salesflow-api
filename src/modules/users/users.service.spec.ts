@@ -361,3 +361,57 @@ describe('UsersService.create', () => {
     expect(JSON.stringify(repository.create.mock.calls)).not.toContain('temp-password-123');
   });
 });
+
+describe('role assignment escalation', () => {
+  const support = actorOf({ role: 'SUPPORT', permissions: ['users:create', 'users:update'] });
+  const richRole = {
+    id: 'role-rich',
+    name: 'SALES_MANAGER',
+    permissionKeys: ['users:update', 'reports:read'],
+  };
+  const dto = {
+    email: 'a@x.test',
+    firstName: 'A',
+    lastName: 'B',
+    roleId: 'role-rich',
+    temporaryPassword: 'whatever-long-enough',
+  };
+
+  it('rejects creating a user with a role holding permissions the caller lacks', async () => {
+    repository.findRole.mockResolvedValue(richRole);
+    expect(await failure(service.create(support, dto))).toEqual([403, 'CANNOT_GRANT_PERMISSION']);
+    expect(repository.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects assigning such a role to another user, and to oneself', async () => {
+    repository.findRole.mockResolvedValue(richRole);
+    usersById(userOf(), userOf({ id: 'actor' }));
+    expect(await failure(service.update(support, 'target', { roleId: 'role-rich' }))).toEqual([
+      403,
+      'CANNOT_GRANT_PERMISSION',
+    ]);
+    // Self role change is refused outright, before the escalation rule is even needed.
+    expect(await failure(service.update(support, 'actor', { roleId: 'role-rich' }))).toEqual([
+      403,
+      'CANNOT_CHANGE_OWN_ROLE',
+    ]);
+  });
+
+  it('allows assigning a role whose permissions the caller fully holds', async () => {
+    repository.findRole.mockResolvedValue({
+      id: 'role-small',
+      name: 'SUPPORT_LITE',
+      permissionKeys: ['users:update'],
+    });
+    usersById(userOf());
+    await service.update(support, 'target', { roleId: 'role-small' });
+    expect(repository.update).toHaveBeenCalled();
+  });
+
+  it('lets ADMIN assign any role', async () => {
+    repository.findRole.mockResolvedValue(richRole);
+    usersById(userOf());
+    await service.update(actorOf(), 'target', { roleId: 'role-rich' });
+    expect(repository.update).toHaveBeenCalled();
+  });
+});

@@ -48,6 +48,12 @@ export type UserChanges = Pick<
 
 export type UsersTx = TenantTransactionClient;
 
+export interface RoleRef {
+  id: string;
+  name: string;
+  permissionKeys: string[];
+}
+
 @Injectable()
 export class UsersRepository {
   constructor(@Inject(PRISMA_TENANT) private readonly prisma: TenantPrismaClient) {}
@@ -92,8 +98,22 @@ export class UsersRepository {
     return buildPaginated(rows, total, query);
   }
 
-  findRole(roleId: string, db: UsersTx): Promise<{ id: string; name: string } | null> {
-    return db.role.findUnique({ where: { id: roleId }, select: { id: true, name: true } });
+  // Permission keys come along so the service can apply the escalation rule without a second query.
+  async findRole(roleId: string, db: UsersTx): Promise<RoleRef | null> {
+    const role = await db.role.findUnique({
+      where: { id: roleId },
+      select: {
+        id: true,
+        name: true,
+        permissions: { select: { permission: { select: { key: true } } } },
+      },
+    });
+    if (!role) return null;
+    return {
+      id: role.id,
+      name: role.name,
+      permissionKeys: role.permissions.map(({ permission }) => permission.key),
+    };
   }
 
   create(data: NewUserData, db: UsersTx): Promise<UserRecord> {

@@ -39,7 +39,7 @@ export async function seedPermissions(prisma: PrismaClient): Promise<void> {
 
 // Creates everything a tenant needs to be usable: org, default roles, first admin, default pipeline.
 // Idempotent on natural keys (slug, role name, email). Shared with the future `org:create` script.
-// Existing rows are never overwritten, so admin edits (password, renamed pipeline, extra role
+// Existing rows are never overwritten, so admin edits (password, renamed pipeline, role
 // permissions) survive a re-run.
 export async function seedOrganization(
   prisma: PrismaClient,
@@ -68,25 +68,35 @@ export async function seedOrganization(
 
     const roleIdByName = new Map<string, string>();
     for (const [name, definition] of Object.entries(DEFAULT_ROLES)) {
-      const role = await tx.role.upsert({
+      const existing = await tx.role.findUnique({
         where: { organizationId_name: { organizationId: org.id, name } },
-        update: {},
-        create: {
-          organizationId: org.id,
-          name,
-          description: definition.description,
-          isSystem: true,
-        },
+        select: { id: true },
       });
+      const role =
+        existing ??
+        (await tx.role.create({
+          data: {
+            organizationId: org.id,
+            name,
+            description: definition.description,
+            isSystem: true,
+          },
+          select: { id: true },
+        }));
       roleIdByName.set(name, role.id);
-      // skipDuplicates adds missing permissions without touching ones already granted.
-      await tx.rolePermission.createMany({
-        data: definition.permissions.map((key) => ({
-          roleId: role.id,
-          permissionId: permissionIdByKey.get(key) as string,
-        })),
-        skipDuplicates: true,
-      });
+      // The seed runs on every container start, so it must not undo an admin who trimmed a role.
+      // Defaults are granted when the role is created; only ADMIN is kept in sync with the
+      // catalogue (it must always be able to do everything, including new permissions).
+      if (!existing || name === ROLE_NAMES.ADMIN) {
+        // skipDuplicates adds missing permissions without touching ones already granted.
+        await tx.rolePermission.createMany({
+          data: definition.permissions.map((key) => ({
+            roleId: role.id,
+            permissionId: permissionIdByKey.get(key) as string,
+          })),
+          skipDuplicates: true,
+        });
+      }
     }
 
     const adminId =

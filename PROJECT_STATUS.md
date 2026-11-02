@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 11 — Tasks & Follow-ups — **done**, awaiting your review/commit (two commits suggested below). Next: Phase 12 Queue foundation + Notifications (only when you ask).
+Phase 12 — Queue foundation + Notifications — split in three. **12a done (awaiting your review/commit)**; 12b (task reminders, overdue scheduler, refresh-token cleanup) and 12c (Bull Board, README) not started — only when you ask.
 
 ## Completed phases
 
@@ -31,6 +31,7 @@ Phase 11 — Tasks & Follow-ups — **done**, awaiting your review/commit (two c
 - Phase 11a — Tasks (CRUD, assignee = owner, status workflow via `applyStatusTransition`, four optional links with shared contact/company locks only when a link changes, computed overdue, `task.assigned` event, admin-only delete of closed tasks, ADR 0010) ✅ (2026-11-02) — suggested commit: `feat(tasks): add tasks with assignment, status workflow, links and overdue detection`
 - Phase 11b — Contact and company delete blocked by OPEN/IN_PROGRESS tasks (`CONTACT_HAS_OPEN_TASKS`, `COMPANY_HAS_OPEN_TASKS`) ✅ (2026-11-02) — suggested commit: `feat(contacts,companies): block delete while open tasks are linked`
 - **Phase 11 — Tasks & Follow-ups ✅ complete** (reminder job, overdue scheduler and task notifications are Phase 12)
+- Phase 12a — Queue foundation + notifications (BullMQ 6 on Redis, `JobQueueService` / `QueueWorkersService`, Notifications inbox API, `task.assigned` / `lead.converted` / `deal.stage_changed` consumers, idempotent insert via `Notification.dedupeKey`, Redis readiness ping, ADR 0011) ✅ (2026-11-02) — suggested commit: `feat(queue,notifications): add BullMQ foundation and in-app notifications`
 
 ## Decisions log
 
@@ -118,13 +119,20 @@ Phase 11 — Tasks & Follow-ups — **done**, awaiting your review/commit (two c
 
 - 2026-11-02 — 11 (ADR 0010): task visibility follows the ASSIGNEE (`applyVisibility(.., 'assigneeId')`); a rep whose task is reassigned away gets 404. `dueDate`/`reminderAt` = full instants, ISO 8601 WITH timezone required (`IsInstant`, date-only/no-offset = 400), stored UTC. One `now` per request feeds `?overdue`, `isOverdue` and reminder checks; overdue = open/in-progress and dueDate < now (strict). Past dueDate allowed, past reminderAt rejected (`INVALID_REMINDER`), reminder <= dueDate; changing either re-arms `reminderSentAt = null`. COMPLETED/CANCELLED read-only (`TASK_CLOSED`) until reopened (reopen clears completedAt). Hard delete; closed tasks deletable by ADMIN only (`TASK_DELETE_RESTRICTED` 403; invisible = 404); `task.deleted` structured log. **TODO Phase 13:** audit-log task deletes/reassignments. Open tasks do not block lead/deal delete. Blocker order: 404, deals, tasks; count not visibility-scoped, no counts in messages. New shared bits: `IsInstant` (common/validators), `queryBoolean` (string-transform.util, Users DTO now uses it), `LeadsService.assertLinkable` / `DealsService.assertLinkable` (no lock), `test/support/advisory-locks.ts` (holdLock/stillPendingAfter; older e2e specs still have their own copy: follow-up). `LeadsModule` now exports `LeadsService`; `DealsService` private link check renamed `assertPartiesLinkable`
 
+- 2026-11-02 — 12a (ADR 0011): approved packages `bullmq`, `@nestjs/bullmq` **^11** (v12 is ESM-only), `ioredis` ^5; `@nestjs/schedule` arrives in 12b. pnpm offered a `minimumReleaseAgeExclude` for the day-old bullmq 6.5.4: refused, 6.5.3 is pinned by range instead. Queues are produced only through `JobQueueService` (2 s bound, error listeners); workers are `QueueWorkersService` (handlers self-register, tenant from the payload, `UnrecoverableError` without a tenant, forced close after 10 s). `@Processor` is not used (config-driven worker switch `QUEUE_WORKERS_ENABLED`). Default job options: 5 attempts, exponential 2 s, trimmed history
+- 2026-11-02 — 12a: **no guaranteed delivery.** Event -> enqueue is best effort after the commit (outbox deferred to its own decision, ADR 0011 table of guarantees). Queue -> table is at-least-once + unique `(organizationId, dedupeKey)` = one row. Unknown recipient completes as skipped, DB errors retry. Inbox endpoints have no `@Permissions` (always the caller own rows). `TcpHealthIndicator` deleted, `/health/ready` pings Redis through BullMQ. `DealsService.findOwnerId` added (additive) for the deal-move notification
+- 2026-11-02 — 12a e2e uses the **real compose Redis**: `createTestApp({ queue: { workers } })` + private `salesflow-test-<random>` prefix, `purgeTestQueues` obliterates only that prefix. Default e2e env: dead Redis port, `QUEUE_WORKERS_ENABLED=false` (without it every app started a worker against the dead port and `app.close()` hung)
+- 2026-11-02 — Local environment: host port 6379 is another project Redis (`eltamam-redis`). This project Redis was recreated with the dev override on **6380**; local `.env` now has `REDIS_PORT=6380`, `REDIS_HOST_PORT=6380`, `TEST_REDIS_PORT=6380` (`.env` is not committed; `.env.example` documents `TEST_REDIS_PORT`)
+
 ## Open questions
 
-- None.
+- **Outbox** for lost events (ADR 0008/0009/0010/0011): separate architectural decision, still open. Touches Leads, Deals and Tasks.
+- `LEAD_ASSIGNED` notification needs a `lead.assigned` event in Leads (not built; not in 12a).
+- Notification retention (no cleanup yet): decide in 12b with the refresh-token cleanup.
 
 ## Next step
 
-Phase 12 — Queue foundation + Notifications (BullMQ setup; reminder job reading `Task.reminderAt`/`reminderSentAt`, overdue scheduler, `task.assigned` / `lead.converted` / `deal.stage_changed` consumers; outbox for lost events; refresh-token cleanup job) — only when you ask.
+Phase 12b — Task reminders and overdue scheduler (`@nestjs/schedule`; reminder job on `Task.reminderAt`/`reminderSentAt` with a conditional marker update, overdue scheduler reusing `overdueWhere`, `TASK_DUE_SOON` / `TASK_OVERDUE` notifications through `NotificationDispatcher`; refresh-token cleanup job) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -134,7 +142,9 @@ Phase 12 — Queue foundation + Notifications (BullMQ setup; reminder job readin
 - `docker/entrypoint.sh` waits for DB, runs `prisma migrate deploy` and the idempotent seed (via `tsx`, a prod dependency; the runtime image has no pnpm), then `exec`s the command. `.gitattributes` forces LF on `*.sh`.
 - pnpm needed `pnpm install --config.confirmModulesPurge=false` once (node_modules pointed at an old virtual store location).
 - Logger: `src/infrastructure/logger` (nestjs-pino; request id via `x-request-id`, auth/cookie headers redacted).
-- Skeleton folders keep a `.gitkeep` only while empty (`src/common/interceptors`, `src/infrastructure/queue`, `src/jobs`); delete it when the first real file arrives.
+- Skeleton folders keep a `.gitkeep` only while empty (`src/common/interceptors`); delete it when the first real file arrives. (`queue` and `jobs` got real files in 12a.)
+- Queue (12a): `infrastructure/queue` (constants, types, `JobQueueService.enqueue/ping`, `QueueWorkersService.register`), `jobs/` (processors grouped by domain, `JobsModule`), `modules/notifications` (listener -> `notification-job.factory` -> `NotificationDispatcher` -> queue; `NotificationsService.createFromJob` is the idempotent write). New job = a `QueueName`, a payload extending `TenantJobPayload`, a handler that registers itself in `onModuleInit`. 12b dispatches `TASK_DUE_SOON` / `TASK_OVERDUE` with `dedupeKey`s of the same shape. Bash heredocs with apostrophes fail on this machine; use the Write tool for files.
+- Queue e2e: `createTestApp({ queue: { workers: true } })`, `purgeTestQueues(app)` in `afterAll`, `test/support/wait-for.ts`. Needs `TEST_REDIS_PORT` and the compose Redis published on that port.
 - Prisma: after `pnpm install` run `pnpm prisma:generate` (`build` and `start:dev` do it automatically). Seed locally: `pnpm db:seed`. New migration: `pnpm prisma:migrate` (never edit an applied one).
 - Nested Prisma writes through a composite FK must NOT pass `organizationId` (it comes from the parent). Flat creates must pass it.
 - Do not run `docker compose -f docker-compose.yml ...` while using the dev stack: it recreates `postgres` without the published port. Fix with `docker compose up -d postgres`.

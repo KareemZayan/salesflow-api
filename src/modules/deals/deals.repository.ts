@@ -112,6 +112,12 @@ export class DealsRepository {
     });
   }
 
+  // The current owner of a (live) deal of the active tenant, for system consumers with no caller.
+  async findOwnerId(id: string): Promise<string | null> {
+    const deal = await this.prisma.deal.findFirst({ where: { id }, select: { ownerId: true } });
+    return deal?.ownerId ?? null;
+  }
+
   findVisible(
     scope: VisibilityScope,
     id: string,

@@ -1,5 +1,4 @@
 import { Controller, Get } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import {
   HealthCheck,
   HealthCheckResult,
@@ -8,9 +7,8 @@ import {
 } from '@nestjs/terminus';
 import { SkipThrottle } from '@nestjs/throttler';
 import { Public } from '../../common/decorators/public.decorator';
-import { APP_CONFIG_KEY, AppConfig } from '../../config/app.config';
 import { PrismaService } from '../prisma/prisma.service';
-import { TcpHealthIndicator } from './indicators/tcp-health.indicator';
+import { RedisHealthIndicator } from './indicators/redis-health.indicator';
 
 // Mounted outside the /api/v1 prefix (see main.ts) so orchestrators can probe a stable path.
 export const HEALTH_ROUTE = 'health';
@@ -27,8 +25,7 @@ export class HealthController {
     private readonly health: HealthCheckService,
     private readonly prismaHealth: PrismaHealthIndicator,
     private readonly prisma: PrismaService,
-    private readonly tcp: TcpHealthIndicator,
-    private readonly configService: ConfigService,
+    private readonly redis: RedisHealthIndicator,
   ) {}
 
   // Liveness: the process is up. Must not depend on external services.
@@ -42,10 +39,9 @@ export class HealthController {
   @Get('ready')
   @HealthCheck()
   ready(): Promise<HealthCheckResult> {
-    const { redis } = this.configService.getOrThrow<AppConfig>(APP_CONFIG_KEY);
     return this.health.check([
       () => this.prismaHealth.pingCheck('postgres', this.prisma, { timeout: DB_CHECK_TIMEOUT_MS }),
-      () => this.tcp.check('redis', redis),
+      () => this.redis.check('redis'),
     ]);
   }
 }

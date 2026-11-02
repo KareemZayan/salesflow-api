@@ -517,12 +517,17 @@ model Notification {
   body           String?
   payload        Json?
   readAt         DateTime?
+  // Idempotency key of the job that created the notification (e.g. "task.assigned-<taskId>-<ms>").
+  // A retried or duplicated job hits the unique index instead of notifying twice. NULL = none.
+  dedupeKey      String?
   createdAt      DateTime         @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   user         User         @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
 
   @@unique([id, organizationId])
+  // NULLs are distinct in PostgreSQL, so notifications without a key never clash.
+  @@unique([organizationId, dedupeKey])
   // Unread inbox and unread count.
   @@index([userId, readAt, createdAt(sort: Desc)])
 }

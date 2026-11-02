@@ -14,14 +14,21 @@ export interface AppConfig {
   trustProxy: TrustProxy;
   logLevel: Env['LOG_LEVEL'];
   databaseUrl: string;
-  redis: HostPort;
+  redis: RedisConfig;
+  queue: QueueConfig;
   auth: AuthConfig;
   throttle: ThrottleConfig;
 }
 
-interface HostPort {
+export interface RedisConfig {
   host: string;
   port: number;
+  password?: string;
+}
+
+export interface QueueConfig {
+  prefix: string;
+  workersEnabled: boolean;
 }
 
 export interface AuthConfig {
@@ -54,7 +61,15 @@ export const appConfig = registerAs(APP_CONFIG_KEY, (): AppConfig => ({
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY as string),
   logLevel: process.env.LOG_LEVEL as Env['LOG_LEVEL'],
   databaseUrl: process.env.DATABASE_URL as string,
-  redis: { host: process.env.REDIS_HOST as string, port: Number(process.env.REDIS_PORT) },
+  redis: {
+    host: process.env.REDIS_HOST as string,
+    port: Number(process.env.REDIS_PORT),
+    password: process.env.REDIS_PASSWORD || undefined,
+  },
+  queue: {
+    prefix: process.env.QUEUE_PREFIX as string,
+    workersEnabled: process.env.QUEUE_WORKERS_ENABLED === 'true',
+  },
   auth: {
     accessSecret: process.env.JWT_ACCESS_SECRET as string,
     accessExpiresInSeconds: parseDurationMs(process.env.JWT_ACCESS_EXPIRES_IN as string) / 1000,

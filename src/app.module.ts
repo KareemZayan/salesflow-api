@@ -5,6 +5,7 @@ import { CommonModule } from './common/common.module';
 import { appConfig } from './config/app.config';
 import { validateEnv } from './config/validate-env';
 import { HealthModule } from './infrastructure/health/health.module';
+import { JobsModule } from './jobs/jobs.module';
 import { LoggerModule } from './infrastructure/logger/logger.module';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -12,6 +13,7 @@ import { CompaniesModule } from './modules/companies/companies.module';
 import { ContactsModule } from './modules/contacts/contacts.module';
 import { DealsModule } from './modules/deals/deals.module';
 import { LeadsModule } from './modules/leads/leads.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { PipelinesModule } from './modules/pipelines/pipelines.module';
 import { RolesModule } from './modules/roles/roles.module';
@@ -41,6 +43,8 @@ import { UsersModule } from './modules/users/users.module';
     PipelinesModule,
     DealsModule,
     TasksModule,
+    NotificationsModule,
+    JobsModule,
   ],
 })
 export class AppModule {}

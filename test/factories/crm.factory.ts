@@ -1,4 +1,5 @@
 import type { PrismaClient } from '../../prisma/seed/prisma-client';
+import type { LeadSource } from '../../src/generated/prisma/client';
 
 let sequence = 0;
 
@@ -30,6 +31,32 @@ export function createContact(
       ownerId,
       firstName: 'Contact',
       lastName: `No${++sequence}`,
+      ...overrides,
+    },
+  });
+}
+
+export function createLead(
+  prisma: PrismaClient,
+  { organizationId, ownerId }: Owned,
+  overrides: {
+    firstName?: string;
+    email?: string;
+    phone?: string;
+    companyName?: string;
+    source?: LeadSource;
+    score?: number;
+    notes?: string;
+    deletedAt?: Date;
+  } = {},
+) {
+  return prisma.lead.create({
+    data: {
+      organizationId,
+      ownerId,
+      firstName: 'Lead',
+      lastName: `No${++sequence}`,
+      source: 'OTHER',
       ...overrides,
     },
   });

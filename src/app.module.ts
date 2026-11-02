@@ -9,6 +9,7 @@ import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { CompaniesModule } from './modules/companies/companies.module';
 import { ContactsModule } from './modules/contacts/contacts.module';
+import { LeadsModule } from './modules/leads/leads.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { RolesModule } from './modules/roles/roles.module';
 import { UsersModule } from './modules/users/users.module';
@@ -31,6 +32,7 @@ import { UsersModule } from './modules/users/users.module';
     OrganizationsModule,
     CompaniesModule,
     ContactsModule,
+    LeadsModule,
   ],
 })
 export class AppModule {}

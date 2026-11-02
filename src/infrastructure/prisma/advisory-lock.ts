@@ -10,9 +10,10 @@ import { Prisma } from '../../generated/prisma/client';
 // families from colliding. The 'org' key is exactly `org:<id>`, as it was before this helper was
 // generalised, so locks taken by older code paths still exclude each other.
 //
-// Lock ordering: take ONE lock per transaction. If a flow ever needs two, take 'org' first, then
-// 'company' (always the broader scope first), so two transactions can never wait on each other.
-export type LockKind = 'org' | 'company';
+// Lock ordering: take ONE lock per transaction. If a flow ever needs two, take them in this order:
+// 'org', then 'lead', then 'company', so two transactions can never wait on each other. (Lead
+// conversion, Phase 9, locks the lead first and then the company it links or creates.)
+export type LockKind = 'org' | 'lead' | 'company';
 
 export async function acquireLock(
   tx: Pick<Prisma.TransactionClient, '$executeRaw'>,

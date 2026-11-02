@@ -1,5 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { ERROR_CODES } from '../../common/constants/error-codes';
+import { DomainException } from '../../common/exceptions/domain.exception';
 import { publishDomainEvent } from '../../common/events/publish-domain-event';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { resourceNotFound } from '../../common/exceptions/resource-not-found';
@@ -78,6 +80,17 @@ export class DealsService {
     return toDealResponse(deal);
   }
 
+  // For modules that link their records to a deal (tasks). Nothing blocks deleting a deal, so no lock
+  // is needed. Missing, deleted, foreign and not-visible deals all give the same 400.
+  async assertLinkable(scope: VisibilityScope, dealId: string): Promise<void> {
+    if (await this.repository.findVisible(scope, dealId)) return;
+    throw new DomainException(
+      ERROR_CODES.INVALID_DEAL,
+      'The deal must be one you are allowed to link',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
   // Locks (advisory-lock.ts, order pipeline -> company -> contact), all SHARED: placing a deal
   // needs the pipeline's stages and the linked records to stay as they are, but two deals do not
   // need to wait for each other. Stage/pipeline deletes (exclusive) and contact/company deletes
@@ -90,7 +103,7 @@ export class DealsService {
     const deal = await this.repository.inLocks(
       sharedLocks(pipelineId, dto.companyId, dto.contactId),
       async (tx) => {
-        await this.assertLinkable(tx, scope, dto.companyId, dto.contactId);
+        await this.assertPartiesLinkable(tx, scope, dto.companyId, dto.contactId);
         return this.createWithin(tx, {
           organizationId: actor.organizationId,
           actorId: actor.userId,
@@ -179,7 +192,7 @@ export class DealsService {
         ? await this.repository.inLocks(
             sharedLocks(undefined, newCompanyId, newContactId),
             async (tx) => {
-              await this.assertLinkable(tx, scope, newCompanyId, newContactId);
+              await this.assertPartiesLinkable(tx, scope, newCompanyId, newContactId);
               return this.repository.updateOpenVisible(scope, id, changes, tx);
             },
           )
@@ -276,7 +289,7 @@ export class DealsService {
     if (!deleted) throw resourceNotFound('Deal');
   }
 
-  private async assertLinkable(
+  private async assertPartiesLinkable(
     tx: DealsTx,
     scope: VisibilityScope,
     companyId: string | null | undefined,

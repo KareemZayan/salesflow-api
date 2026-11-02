@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 10 — Pipelines & Deals — **done (10a, 10b, 10c, 10d)**, awaiting your review/commit (branch `feat/phase-10-pipelines-deals`, one commit per part is suggested below). Next: Phase 11 Tasks & Follow-ups (only when you ask).
+Phase 11 — Tasks & Follow-ups — **done**, awaiting your review/commit (two commits suggested below). Next: Phase 12 Queue foundation + Notifications (only when you ask).
 
 ## Completed phases
 
@@ -28,6 +28,9 @@ Phase 10 — Pipelines & Deals — **done (10a, 10b, 10c, 10d)**, awaiting your 
 - Phase 10c — Stage moves (`POST /deals/:id/move`, `GET /deals/:id/history`, won/lost/reopen, history in the same tx, `deal.stage_changed`, `publishDomainEvent` extraction, predicate transition rule) ✅ (2026-11-02) — suggested commit: `feat(deals): add stage moves with history and won/lost handling`
 - Phase 10d — Optional deal inside lead conversion (`ConvertLeadDto.deal`, lock order lead -> pipeline(shared) -> company|contact, `deals:create` only when a deal is sent) ✅ (2026-11-02) — suggested commit: `feat(leads): create an optional deal during lead conversion`
 - **Phase 10 — Pipelines & Deals ✅ complete**
+- Phase 11a — Tasks (CRUD, assignee = owner, status workflow via `applyStatusTransition`, four optional links with shared contact/company locks only when a link changes, computed overdue, `task.assigned` event, admin-only delete of closed tasks, ADR 0010) ✅ (2026-11-02) — suggested commit: `feat(tasks): add tasks with assignment, status workflow, links and overdue detection`
+- Phase 11b — Contact and company delete blocked by OPEN/IN_PROGRESS tasks (`CONTACT_HAS_OPEN_TASKS`, `COMPANY_HAS_OPEN_TASKS`) ✅ (2026-11-02) — suggested commit: `feat(contacts,companies): block delete while open tasks are linked`
+- **Phase 11 — Tasks & Follow-ups ✅ complete** (reminder job, overdue scheduler and task notifications are Phase 12)
 
 ## Decisions log
 
@@ -96,7 +99,7 @@ Phase 10 — Pipelines & Deals — **done (10a, 10b, 10c, 10d)**, awaiting your 
 - 2026-11-02 — **Shared helper `common/utils/status-transition.util.ts`** (`TransitionMap<S>`, `isTransitionAllowed`, `applyStatusTransition`): read with visibility -> map check -> ONE conditional update with `status = read value` -> on a miss re-read with visibility (null = 404, else a conflict naming the new status). Deals (Phase 10) and Tasks (Phase 11) MUST reuse it with their own map + exceptions; do not copy the logic. Leads wiring: `lead-status-transitions.ts`, `leads.exceptions.ts`, `LeadsRepository.transitionStatus`
 - 2026-11-02 — Converted leads are final: PATCH (owner transfer included) and DELETE put `status != CONVERTED` in the same where as the write; a miss re-reads with visibility -> visible+CONVERTED = `409 LEAD_ALREADY_CONVERTED`, else 404 (an invisible converted lead is always 404); GET/list still work; empty PATCH is 400 first. Two 409 codes for the frontend: `LEAD_ALREADY_CONVERTED` (freeze the record, read-only) vs `INVALID_STATUS_TRANSITION` (GET and refresh, offer valid moves). Phase 9 decides any exception to the owner-transfer block
 - 2026-11-02 — **Deferred to Phase 13 (Activities):** `LeadStatusHistory` (who/from/to/when) via a `lead.status_changed` domain event; not built in 8b to avoid a table that Activities will duplicate. Until then `updatedAt` is the only trace of a status change
-- **TODO Phase 10/11:** decide what open deals / tasks mean for deleting a contact (block with 409? unlink?) and add the check to `ContactsRepository.deleteVisible`
+- ~~TODO Phase 10/11: open deals / tasks vs deleting a contact~~ — done: open deals (10b) and open tasks (11b) block with 409
 - **Follow-up (any time):** Users / Roles / Organizations still build their own RESOURCE_NOT_FOUND; move them to `resourceNotFound(entity)`
 
 - 2026-11-02 — 9 design in ADR 0008: convert from **QUALIFIED only** (upgrade path: add CONVERTED to CONTACTED in `lead-conversion-transitions.ts`). Body `{contactId?, companyId?, createCompany?}`; contradictory combinations = `400 INVALID_CONVERSION_OPTIONS` (the body never "wins"); a lead has no companyId, only text `companyName`. `contactId` links an existing contact and NEVER modifies it. New records belong to the LEAD owner (`ownerForCreate`). Permissions follow what happens: contacts:create only if a contact is created, companies:create only if a company is created, `leads:convert` alone to link an existing contact. No `deal` field (400); Phase 10 adds it inside the same tx
@@ -113,13 +116,15 @@ Phase 10 — Pipelines & Deals — **done (10a, 10b, 10c, 10d)**, awaiting your 
 
 - 2026-11-02 — 10d (ADR 0009): `deal` in the conversion body = `PickType(CreateDealDto, title, amount, currency, pipelineId, stageId, expectedCloseDate)`; links + owner derived (contact, that contact's company, lead owner). `DealsService.resolveDefaults(actor, {currency?, pipelineId?})` runs BEFORE the transaction so the pipeline lock can be taken in order; `LeadsRepository.convert` gained an optional 6th arg `{pipelineId}` (passed only with a deal, so the Phase 9 unit assertions on the call shape are unchanged). Old tests touched on purpose: Phase 9 e2e "unknown deal field is rejected" (now: unknown field INSIDE the deal) and the exact response keys (+`deal: null`); the Phase 9 unit spec only got the new constructor argument. **TODO (dedupe, unchanged):** duplicate contacts/companies are allowed
 
+- 2026-11-02 — 11 (ADR 0010): task visibility follows the ASSIGNEE (`applyVisibility(.., 'assigneeId')`); a rep whose task is reassigned away gets 404. `dueDate`/`reminderAt` = full instants, ISO 8601 WITH timezone required (`IsInstant`, date-only/no-offset = 400), stored UTC. One `now` per request feeds `?overdue`, `isOverdue` and reminder checks; overdue = open/in-progress and dueDate < now (strict). Past dueDate allowed, past reminderAt rejected (`INVALID_REMINDER`), reminder <= dueDate; changing either re-arms `reminderSentAt = null`. COMPLETED/CANCELLED read-only (`TASK_CLOSED`) until reopened (reopen clears completedAt). Hard delete; closed tasks deletable by ADMIN only (`TASK_DELETE_RESTRICTED` 403; invisible = 404); `task.deleted` structured log. **TODO Phase 13:** audit-log task deletes/reassignments. Open tasks do not block lead/deal delete. Blocker order: 404, deals, tasks; count not visibility-scoped, no counts in messages. New shared bits: `IsInstant` (common/validators), `queryBoolean` (string-transform.util, Users DTO now uses it), `LeadsService.assertLinkable` / `DealsService.assertLinkable` (no lock), `test/support/advisory-locks.ts` (holdLock/stillPendingAfter; older e2e specs still have their own copy: follow-up). `LeadsModule` now exports `LeadsService`; `DealsService` private link check renamed `assertPartiesLinkable`
+
 ## Open questions
 
 - None.
 
 ## Next step
 
-Phase 11 — Tasks & Follow-ups (assignment, due dates, priority, overdue detection, reminders via jobs; reuse `applyStatusTransition`, `acquireLock`, visibility; add the task blocker to `ContactsRepository.softDeleteIfUnused` / `CompaniesRepository.softDeleteIfUnused`; `LeadStatusHistory` / audit TODOs stay in Phase 13) — only when you ask.
+Phase 12 — Queue foundation + Notifications (BullMQ setup; reminder job reading `Task.reminderAt`/`reminderSentAt`, overdue scheduler, `task.assigned` / `lead.converted` / `deal.stage_changed` consumers; outbox for lost events; refresh-token cleanup job) — only when you ask.
 
 ## Notes for next session (to save context)
 

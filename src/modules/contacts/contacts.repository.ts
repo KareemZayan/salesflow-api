@@ -11,6 +11,7 @@ import { applyVisibility } from '../../common/visibility/ownership-filter';
 import { VisibilityScope } from '../../common/visibility/visibility.types';
 import { DealStatus, Prisma } from '../../generated/prisma/client';
 import { acquireLock } from '../../infrastructure/prisma/advisory-lock';
+import { OPEN_TASK_STATUSES } from '../tasks/tasks.constants';
 import { PRISMA_TENANT } from '../../infrastructure/prisma/prisma.constants';
 import { CONTACT_SEARCH_FIELDS, CONTACT_SORT_FIELDS } from './contacts.constants';
 import { ListContactsQueryDto } from './dto/list-contacts-query.dto';
@@ -55,7 +56,7 @@ export interface CompanyLink {
   verify: (db: Pick<TenantTransactionClient, 'company'>) => Promise<void>;
 }
 
-export type DeleteOutcome = 'deleted' | 'not-found' | 'has-open-deals';
+export type DeleteOutcome = 'deleted' | 'not-found' | 'has-open-deals' | 'has-open-tasks';
 
 type ContactDb = Pick<TenantTransactionClient, 'contact'>;
 
@@ -130,9 +131,10 @@ export class ContactsRepository {
   }
 
   // Soft delete (the tenant client turns `delete` into setting `deletedAt`), refused while the
-  // contact has OPEN deals. It takes the 'contact' lock, the one lead conversion and deal writes
+  // contact has OPEN deals or OPEN / IN_PROGRESS tasks (deals are reported first). It takes the 'contact' lock, the one lead conversion and deal writes
   // hold while they check and link an existing contact: a link that runs first is counted here, one
-  // that runs after sees the contact deleted. Visibility is checked first, so a contact the caller
+  // that runs after sees the contact deleted; task writes take the same lock (shared) and a task
+  // is counted only after this lock is held. Visibility is checked first, so a contact the caller
   // cannot see is "not-found" even when it has deals. The count is NOT visibility-scoped (the deals
   // of other users block too), and `deletedAt` / status are explicit because the tenant client does
   // not filter nested relations (ADR 0002). Closed deals do not block: they keep only the id.
@@ -142,11 +144,17 @@ export class ContactsRepository {
       const contact = await tx.contact.findFirst({
         where: applyVisibility<Prisma.ContactWhereInput>({ id }, scope),
         select: {
-          _count: { select: { deals: { where: { deletedAt: null, status: DealStatus.OPEN } } } },
+          _count: {
+            select: {
+              deals: { where: { deletedAt: null, status: DealStatus.OPEN } },
+              tasks: { where: { status: { in: [...OPEN_TASK_STATUSES] } } },
+            },
+          },
         },
       });
       if (!contact) return 'not-found';
       if (contact._count.deals > 0) return 'has-open-deals';
+      if (contact._count.tasks > 0) return 'has-open-tasks';
       const deleted = await nullIfNotFound(
         tx.contact.delete({
           where: { id, ...applyVisibility<Prisma.ContactWhereInput>(undefined, scope) },

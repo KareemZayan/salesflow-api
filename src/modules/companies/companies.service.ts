@@ -109,6 +109,13 @@ export class CompaniesService {
         HttpStatus.CONFLICT,
       );
     }
+    if (outcome === 'has-open-tasks') {
+      throw new DomainException(
+        ERROR_CODES.COMPANY_HAS_OPEN_TASKS,
+        'Company has open tasks and cannot be deleted',
+        HttpStatus.CONFLICT,
+      );
+    }
     if (outcome === 'has-contacts') {
       // No count and no owners: the message must not describe records the caller cannot see.
       throw new DomainException(

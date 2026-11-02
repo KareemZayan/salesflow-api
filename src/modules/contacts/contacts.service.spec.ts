@@ -128,6 +128,15 @@ describe('ContactsService.get / list / delete', () => {
     expect(body).toContain('CONTACT_HAS_OPEN_DEALS');
     expect(body).toContain('Contact has open deals and cannot be deleted');
   });
+
+  it('delete answers 409 CONTACT_HAS_OPEN_TASKS without leaking a count', async () => {
+    repository.softDeleteIfUnused.mockResolvedValue('has-open-tasks');
+    const { status, body } = await failure(service.delete(actor, 'k1'));
+    expect(status).toBe(409);
+    expect(body).toContain('CONTACT_HAS_OPEN_TASKS');
+    expect(body).toContain('Contact has open tasks and cannot be deleted');
+    expect(body).not.toMatch(/\d+ task/);
+  });
 });
 
 describe('ContactsService.update', () => {

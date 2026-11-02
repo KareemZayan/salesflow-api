@@ -60,6 +60,20 @@ export const ERROR_CODES = {
   LOST_REASON_NOT_ALLOWED: 'LOST_REASON_NOT_ALLOWED',
   CONTACT_HAS_OPEN_DEALS: 'CONTACT_HAS_OPEN_DEALS',
   COMPANY_HAS_DEALS: 'COMPANY_HAS_DEALS',
+  // Same idea as INVALID_COMPANY / INVALID_CONTACT, for the other two task links.
+  INVALID_LEAD: 'INVALID_LEAD',
+  INVALID_DEAL: 'INVALID_DEAL',
+  // A COMPLETED or CANCELLED task is read-only; reopen it through the status endpoint.
+  TASK_CLOSED: 'TASK_CLOSED',
+  // Two 409s a client handles differently: this change makes no sense from the current status vs.
+  // the status moved under the request.
+  INVALID_TASK_TRANSITION: 'INVALID_TASK_TRANSITION',
+  TASK_STATUS_CHANGED: 'TASK_STATUS_CHANGED',
+  // Only an ADMIN may delete a COMPLETED / CANCELLED task (history is not erased by its owner).
+  TASK_DELETE_RESTRICTED: 'TASK_DELETE_RESTRICTED',
+  INVALID_REMINDER: 'INVALID_REMINDER',
+  CONTACT_HAS_OPEN_TASKS: 'CONTACT_HAS_OPEN_TASKS',
+  COMPANY_HAS_OPEN_TASKS: 'COMPANY_HAS_OPEN_TASKS',
   // Two 409s on leads that clients handle differently: the lead is final (CONVERTED) vs. this status
   // change is not possible from the lead's current status.
   LEAD_ALREADY_CONVERTED: 'LEAD_ALREADY_CONVERTED',

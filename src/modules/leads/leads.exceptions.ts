@@ -31,6 +31,20 @@ export function rejectedLeadTransition(from: LeadStatus, to: LeadStatus): Domain
     : new InvalidLeadStatusTransitionException(`A lead cannot move from ${from} to ${to}`);
 }
 
+export class InvalidConversionOptionsException extends DomainException {
+  constructor(message: string) {
+    super(ERROR_CODES.INVALID_CONVERSION_OPTIONS, message, HttpStatus.BAD_REQUEST);
+  }
+}
+
+export function rejectedLeadConversion(from: LeadStatus): DomainException {
+  return from === LeadStatus.CONVERTED
+    ? new LeadAlreadyConvertedException()
+    : new InvalidLeadStatusTransitionException(
+        `Only a QUALIFIED lead can be converted (this lead is ${from})`,
+      );
+}
+
 export function concurrentLeadStatusChange(actual: LeadStatus): DomainException {
   return actual === LeadStatus.CONVERTED
     ? new LeadAlreadyConvertedException()

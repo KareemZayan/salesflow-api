@@ -31,6 +31,10 @@ export const ERROR_CODES = {
   // One code for every reason a company cannot be linked (missing, deleted, other organization, not
   // visible to the caller), so the answer never confirms that a company exists.
   INVALID_COMPANY: 'INVALID_COMPANY',
+  // Same idea for linking an existing contact during lead conversion.
+  INVALID_CONTACT: 'INVALID_CONTACT',
+  // The combination of conversion options is contradictory (ADR 0008).
+  INVALID_CONVERSION_OPTIONS: 'INVALID_CONVERSION_OPTIONS',
   // Two 409s on leads that clients handle differently: the lead is final (CONVERTED) vs. this status
   // change is not possible from the lead's current status.
   LEAD_ALREADY_CONVERTED: 'LEAD_ALREADY_CONVERTED',

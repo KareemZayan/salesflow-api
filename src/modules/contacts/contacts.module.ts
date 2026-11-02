@@ -9,5 +9,6 @@ import { ContactsService } from './contacts.service';
   imports: [VisibilityModule, CompaniesModule],
   controllers: [ContactsController],
   providers: [ContactsService, ContactsRepository],
+  exports: [ContactsService],
 })
 export class ContactsModule {}

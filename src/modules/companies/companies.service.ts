@@ -9,7 +9,12 @@ import { ownerForCreate, ownerForTransfer } from '../../common/visibility/owner-
 import { TenantTransactionClient } from '../../common/tenant/tenant-scope.extension';
 import { OwnershipScopeService } from '../../common/visibility/ownership-scope.service';
 import { VisibilityScope } from '../../common/visibility/visibility.types';
-import { CompaniesRepository, CompanyChanges, CompanyRecord } from './companies.repository';
+import {
+  CompaniesRepository,
+  CompanyChanges,
+  CompanyRecord,
+  NewCompanyData,
+} from './companies.repository';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { ListCompaniesQueryDto } from './dto/list-companies-query.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -49,6 +54,14 @@ export class CompaniesService {
       'The company must be one you are allowed to link contacts to',
       HttpStatus.BAD_REQUEST,
     );
+  }
+
+  // Creates a company inside the caller's transaction (lead conversion).
+  createWithin(
+    db: Pick<TenantTransactionClient, 'company'>,
+    data: NewCompanyData,
+  ): Promise<CompanyRecord> {
+    return this.repository.createWithin(db, data);
   }
 
   async create(actor: AuthenticatedUser, dto: CreateCompanyDto): Promise<CompanyRecord> {

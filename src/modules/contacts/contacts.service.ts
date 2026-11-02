@@ -1,10 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { ERROR_CODES } from '../../common/constants/error-codes';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { DomainException } from '../../common/exceptions/domain.exception';
 import { resourceNotFound } from '../../common/exceptions/resource-not-found';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { assertHasChanges } from '../../common/utils/assert-has-changes.util';
 import { ownerForCreate, ownerForTransfer } from '../../common/visibility/owner-assignment';
 import { OwnershipScopeService } from '../../common/visibility/ownership-scope.service';
+import { TenantTransactionClient } from '../../common/tenant/tenant-scope.extension';
 import { VisibilityScope } from '../../common/visibility/visibility.types';
 import { CompaniesService } from '../companies/companies.service';
 import {
@@ -12,6 +15,7 @@ import {
   ContactChanges,
   ContactRecord,
   ContactsRepository,
+  NewContactData,
 } from './contacts.repository';
 import { CreateContactDto } from './dto/create-contact.dto';
 import { ListContactsQueryDto } from './dto/list-contacts-query.dto';
@@ -36,6 +40,31 @@ export class ContactsService {
     const contact = await this.repository.findVisible(await this.ownership.resolve(actor), id);
     if (!contact) throw resourceNotFound('Contact');
     return contact;
+  }
+
+  // For lead conversion. Call it INSIDE the transaction that holds the 'contact' lock and writes the
+  // link: the contact cannot then be deleted between this check and the write. Missing, deleted,
+  // foreign and not-visible contacts all give the same 400.
+  async assertLinkable(
+    db: Pick<TenantTransactionClient, 'contact'>,
+    scope: VisibilityScope,
+    contactId: string,
+  ): Promise<ContactRecord> {
+    const contact = await this.repository.findVisible(scope, contactId, db);
+    if (contact) return contact;
+    throw new DomainException(
+      ERROR_CODES.INVALID_CONTACT,
+      'The contact must be one you are allowed to convert a lead into',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  // Creates a contact inside the caller's transaction (lead conversion).
+  createWithin(
+    db: Pick<TenantTransactionClient, 'contact'>,
+    data: NewContactData,
+  ): Promise<ContactRecord> {
+    return this.repository.createWithin(db, data);
   }
 
   async create(actor: AuthenticatedUser, dto: CreateContactDto): Promise<ContactRecord> {

@@ -86,8 +86,14 @@ export class ContactsRepository {
     });
   }
 
-  findVisible(scope: VisibilityScope, id: string): Promise<ContactRecord | null> {
-    return this.prisma.contact.findFirst({
+  // `db` lets a caller run the read inside its own transaction (lead conversion checks the contact
+  // under the contact lock, in the same transaction as its write).
+  findVisible(
+    scope: VisibilityScope,
+    id: string,
+    db: ContactDb = this.prisma,
+  ): Promise<ContactRecord | null> {
+    return db.contact.findFirst({
       where: applyVisibility<Prisma.ContactWhereInput>({ id }, scope),
       select: contactSelect,
     });
@@ -95,6 +101,11 @@ export class ContactsRepository {
 
   create(data: NewContactData, link?: CompanyLink): Promise<ContactRecord> {
     return this.inCompanyLock(link, (db) => db.contact.create({ data, select: contactSelect }));
+  }
+
+  // For callers that already run a transaction (lead conversion).
+  createWithin(db: ContactDb, data: NewContactData): Promise<ContactRecord> {
+    return db.contact.create({ data, select: contactSelect });
   }
 
   // `null` = no such contact for this caller (missing, deleted, other tenant, not visible, or
@@ -117,15 +128,20 @@ export class ContactsRepository {
   }
 
   // Soft delete (the tenant client turns `delete` into setting `deletedAt`). Nothing blocks it yet;
-  // Phase 10/11 decide what open deals and tasks mean for a contact.
+  // Phase 10/11 decide what open deals and tasks mean for a contact. It takes the 'contact' lock,
+  // the one lead conversion holds while it checks and links an existing contact: a conversion that
+  // runs first links a live contact, one that runs after sees it deleted (INVALID_CONTACT).
   async deleteVisible(scope: VisibilityScope, id: string): Promise<boolean> {
-    const deleted = await nullIfNotFound(
-      this.prisma.contact.delete({
-        where: { id, ...applyVisibility<Prisma.ContactWhereInput>(undefined, scope) },
-        select: { id: true },
-      }),
-    );
-    return deleted !== null;
+    return this.prisma.$transaction(async (tx) => {
+      await acquireLock(tx, 'contact', id);
+      const deleted = await nullIfNotFound(
+        tx.contact.delete({
+          where: { id, ...applyVisibility<Prisma.ContactWhereInput>(undefined, scope) },
+          select: { id: true },
+        }),
+      );
+      return deleted !== null;
+    });
   }
 
   // Linking to a company is "check the company, then write" and must not interleave with the

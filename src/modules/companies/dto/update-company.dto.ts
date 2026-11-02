@@ -6,7 +6,11 @@ import {
   PHONE_MAX_LENGTH,
   PHONE_PATTERN,
 } from '../../../common/policies/contact-details-policy';
-import { trimString, trimToNull } from '../../../common/utils/string-transform.util';
+import {
+  trimLowerToNull,
+  trimString,
+  trimToNull,
+} from '../../../common/utils/string-transform.util';
 import { OptionalButNotNull } from '../../../common/validators/optional-not-null.decorator';
 import {
   COMPANY_ADDRESS_MAX_LENGTH,
@@ -14,7 +18,6 @@ import {
   COMPANY_INDUSTRY_MAX_LENGTH,
   COMPANY_NAME_MAX_LENGTH,
 } from '../companies.constants';
-import { normalizeDomain } from './create-company.dto';
 
 // `name` and `ownerId` are NOT NULL columns (OptionalButNotNull); the other fields may be cleared
 // by sending `null` or a blank string (IsOptional lets null through).
@@ -28,7 +31,7 @@ export class UpdateCompanyDto {
   name?: string;
 
   @ApiPropertyOptional({ example: 'acme.com', nullable: true, type: String })
-  @Transform(normalizeDomain)
+  @Transform(trimLowerToNull)
   @Matches(HOSTNAME_PATTERN, { message: 'domain must be a bare hostname such as acme.com' })
   @MaxLength(COMPANY_DOMAIN_MAX_LENGTH)
   @IsOptional()

@@ -1,8 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
-import { TenantPrismaClient } from '../../common/tenant/tenant-scope.extension';
-import { buildPaginated, toOrderBy, toSkipTake } from '../../common/utils/pagination.util';
-import { isRecordNotFound } from '../../common/utils/prisma-error.util';
+import {
+  TenantPrismaClient,
+  TenantTransactionClient,
+} from '../../common/tenant/tenant-scope.extension';
+import { queryPage } from '../../common/utils/pagination.util';
+import { nullIfNotFound } from '../../common/utils/prisma-error.util';
 import { containsAny } from '../../common/utils/search.util';
 import { applyVisibility } from '../../common/visibility/ownership-filter';
 import { VisibilityScope } from '../../common/visibility/visibility.types';
@@ -50,29 +53,29 @@ export class CompaniesRepository {
     scope: VisibilityScope,
     query: ListCompaniesQueryDto,
   ): Promise<PaginatedResponseDto<CompanyRecord>> {
-    // One `where` feeds both the rows and the total, so the total never counts invisible rows.
-    const where = applyVisibility<Prisma.CompanyWhereInput>(
-      {
-        ownerId: query.ownerId,
-        ...containsAny<Prisma.CompanyWhereInput>(query.q, COMPANY_SEARCH_FIELDS),
-      },
-      scope,
-    );
-    const [rows, total] = await Promise.all([
-      this.prisma.company.findMany({
-        where,
-        select: companySelect,
-        // `id` as a tiebreaker keeps pages stable when the sort column has duplicates.
-        orderBy: [toOrderBy(query, COMPANY_SORT_FIELDS, 'createdAt'), { id: 'asc' }],
-        ...toSkipTake(query),
-      }),
-      this.prisma.company.count({ where }),
-    ]);
-    return buildPaginated(rows, total, query);
+    return queryPage(query, {
+      where: applyVisibility<Prisma.CompanyWhereInput>(
+        {
+          ownerId: query.ownerId,
+          ...containsAny<Prisma.CompanyWhereInput>(query.q, COMPANY_SEARCH_FIELDS),
+        },
+        scope,
+      ),
+      sortFields: COMPANY_SORT_FIELDS,
+      fallbackSort: 'createdAt',
+      find: (args) => this.prisma.company.findMany({ ...args, select: companySelect }),
+      count: (where) => this.prisma.company.count({ where }),
+    });
   }
 
-  findVisible(scope: VisibilityScope, id: string): Promise<CompanyRecord | null> {
-    return this.prisma.company.findFirst({
+  // `db` lets a caller run the read inside its own transaction (contacts check the company under
+  // the company lock, in the same transaction as their write).
+  findVisible(
+    scope: VisibilityScope,
+    id: string,
+    db: Pick<TenantTransactionClient, 'company'> = this.prisma,
+  ): Promise<CompanyRecord | null> {
+    return db.company.findFirst({
       where: applyVisibility<Prisma.CompanyWhereInput>({ id }, scope),
       select: companySelect,
     });
@@ -89,16 +92,13 @@ export class CompaniesRepository {
     id: string,
     data: CompanyChanges,
   ): Promise<CompanyRecord | null> {
-    try {
-      return await this.prisma.company.update({
+    return nullIfNotFound(
+      this.prisma.company.update({
         where: { id, ...applyVisibility<Prisma.CompanyWhereInput>(undefined, scope) },
         data,
         select: companySelect,
-      });
-    } catch (error) {
-      if (isRecordNotFound(error)) return null;
-      throw error;
-    }
+      }),
+    );
   }
 
   // Visibility is checked first, so a company the caller cannot see is a 404 even when it has
@@ -116,15 +116,12 @@ export class CompaniesRepository {
       });
       if (!company) return 'not-found';
       if (company._count.contacts > 0) return 'has-contacts';
-      try {
-        await tx.company.delete({
+      const deleted = await nullIfNotFound(
+        tx.company.delete({
           where: { id, ...applyVisibility<Prisma.CompanyWhereInput>(undefined, scope) },
-        });
-      } catch (error) {
-        if (isRecordNotFound(error)) return 'not-found';
-        throw error;
-      }
-      return 'deleted';
+        }),
+      );
+      return deleted ? 'deleted' : 'not-found';
     });
   }
 }

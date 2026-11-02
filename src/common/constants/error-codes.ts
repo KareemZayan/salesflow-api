@@ -28,6 +28,9 @@ export const ERROR_CODES = {
   INVALID_OWNER: 'INVALID_OWNER',
   EMPTY_UPDATE: 'EMPTY_UPDATE',
   COMPANY_HAS_CONTACTS: 'COMPANY_HAS_CONTACTS',
+  // One code for every reason a company cannot be linked (missing, deleted, other organization, not
+  // visible to the caller), so the answer never confirms that a company exists.
+  INVALID_COMPANY: 'INVALID_COMPANY',
   ROLE_NAME_ALREADY_EXISTS: 'ROLE_NAME_ALREADY_EXISTS',
   ROLE_NAME_RESERVED: 'ROLE_NAME_RESERVED',
   ROLE_IN_USE: 'ROLE_IN_USE',

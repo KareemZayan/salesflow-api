@@ -15,6 +15,12 @@ export const trimToNull = ({ value }: TransformParams): unknown => {
   return trimmed === '' ? null : trimmed;
 };
 
+// For optional, case-insensitive columns (email, domain): trimmed, lowercased, blank stored as NULL.
+export const trimLowerToNull = ({ value }: TransformParams): unknown => {
+  const trimmed = trimToNull({ value });
+  return typeof trimmed === 'string' ? trimmed.toLowerCase() : trimmed;
+};
+
 // For optional filters: surrounding spaces are noise, and a blank value means "no filter".
 export const trimToUndefined = ({ value }: TransformParams): unknown => {
   const trimmed = trimString({ value });

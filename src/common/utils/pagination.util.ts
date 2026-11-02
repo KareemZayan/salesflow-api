@@ -16,6 +16,37 @@ export function buildPaginated<T>(
   return { data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
 }
 
+// One page of an offset-paginated list. The SAME `where` goes to the rows and to the count, so the
+// total can never include rows the page query would hide. `id` is the tiebreaker that keeps pages
+// stable when the sort column has duplicates. A plain function (no base class): the Prisma delegate
+// differs per model, so the caller passes the two queries.
+export async function queryPage<T, W, F extends string>(
+  query: Pick<PaginationQueryDto, 'page' | 'limit' | 'sortBy' | 'sortOrder'>,
+  options: {
+    where: W;
+    sortFields: readonly F[];
+    fallbackSort: F;
+    find: (args: {
+      where: W;
+      orderBy: [Record<F, SortOrder>, { id: 'asc' }];
+      skip: number;
+      take: number;
+    }) => Promise<T[]>;
+    count: (where: W) => Promise<number>;
+  },
+): Promise<PaginatedResponseDto<T>> {
+  const { where, sortFields, fallbackSort, find, count } = options;
+  const [rows, total] = await Promise.all([
+    find({
+      where,
+      orderBy: [toOrderBy(query, sortFields, fallbackSort), { id: 'asc' }],
+      ...toSkipTake(query),
+    }),
+    count(where),
+  ]);
+  return buildPaginated(rows, total, query);
+}
+
 // `sortBy` is user input, so it is checked against a per-endpoint whitelist before it can reach
 // Prisma's `orderBy`.
 export function toOrderBy<F extends string>(

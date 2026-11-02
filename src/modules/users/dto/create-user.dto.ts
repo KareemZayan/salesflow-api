@@ -2,12 +2,8 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../../common/policies/password-policy';
+import { normalizeEmail, trimString } from '../../../common/utils/string-transform.util';
 import { EMAIL_MAX_LENGTH, NAME_MAX_LENGTH } from '../users.constants';
-
-export const normalizeEmail = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' ? value.trim().toLowerCase() : value;
-export const trimString = ({ value }: { value: unknown }): unknown =>
-  typeof value === 'string' ? value.trim() : value;
 
 export class CreateUserDto {
   @ApiProperty({ example: 'jane.doe@acme.com' })

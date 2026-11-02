@@ -37,6 +37,23 @@ export class OwnershipScopeService {
     }));
   }
 
+  // The one rule for "who may this record be given to", for every owned entity (companies,
+  // contacts, leads, deals, tasks). The new owner must be an ACTIVE user of the caller's
+  // organization and inside the caller's own scope: a rep can only name themselves, a manager
+  // themselves or a direct report, an admin anyone. Every failure is the same 400, so the answer
+  // never reveals whether an id belongs to another organization, is inactive, or is out of reach.
+  // Callers invoke it only when the owner actually changes (an unchanged owner is not re-checked,
+  // so editing a record owned by a since-deactivated report keeps working).
+  async resolveAssignableOwner(scope: VisibilityScope, ownerId: string): Promise<string> {
+    const inScope = scope.kind === 'all' || scope.ownerIds.includes(ownerId);
+    if (inScope && (await this.repository.isActiveUser(ownerId))) return ownerId;
+    throw new DomainException(
+      ERROR_CODES.INVALID_OWNER,
+      'The owner must be an active user you are allowed to assign records to',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
   // The CLS store lives for one request, so the team is never reused across requests (a changed
   // team applies on the next call). The promise is cached, so parallel calls share one query.
   // Outside a request (no CLS context) nothing is cached.

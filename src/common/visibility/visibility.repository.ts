@@ -15,4 +15,13 @@ export class VisibilityRepository {
     });
     return reports.map(({ id }) => id);
   }
+
+  // The scoped client only sees the caller's organization, so a foreign id is simply "not found".
+  async isActiveUser(userId: string): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isActive: true },
+    });
+    return user?.isActive === true;
+  }
 }

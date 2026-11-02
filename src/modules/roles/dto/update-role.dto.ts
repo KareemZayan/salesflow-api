@@ -15,7 +15,7 @@ import {
   ROLE_DESCRIPTION_MAX_LENGTH,
   ROLE_NAME_MAX_LENGTH,
 } from '../roles.constants';
-import { trimString } from './create-role.dto';
+import { trimString } from '../../../common/utils/string-transform.util';
 
 export class UpdateRoleDto {
   @ApiPropertyOptional({ maxLength: ROLE_NAME_MAX_LENGTH })

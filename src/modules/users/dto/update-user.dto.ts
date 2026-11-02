@@ -1,9 +1,9 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { normalizeEmail, trimString } from '../../../common/utils/string-transform.util';
 import { OptionalButNotNull } from '../../../common/validators/optional-not-null.decorator';
 import { EMAIL_MAX_LENGTH, NAME_MAX_LENGTH } from '../users.constants';
-import { normalizeEmail, trimString } from './create-user.dto';
 
 export class UpdateUserDto {
   @ApiPropertyOptional()

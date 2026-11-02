@@ -7,7 +7,7 @@ import {
 } from '../../common/tenant/tenant-scope.extension';
 import { buildPaginated, toOrderBy, toSkipTake } from '../../common/utils/pagination.util';
 import { Prisma } from '../../generated/prisma/client';
-import { acquireOrgLock } from '../../infrastructure/prisma/org-lock';
+import { acquireLock } from '../../infrastructure/prisma/advisory-lock';
 import { PRISMA_TENANT } from '../../infrastructure/prisma/prisma.constants';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { USER_SORT_FIELDS } from './users.constants';
@@ -62,7 +62,7 @@ export class UsersRepository {
   // rules that look at other rows (last admin, manager cycle, active reports) cannot be raced.
   withOrgLock<T>(organizationId: string, work: (tx: UsersTx) => Promise<T>): Promise<T> {
     return this.prisma.$transaction(async (tx) => {
-      await acquireOrgLock(tx, organizationId);
+      await acquireLock(tx, 'org', organizationId);
       return work(tx);
     });
   }

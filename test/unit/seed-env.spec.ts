@@ -1,4 +1,5 @@
-import { PLACEHOLDER_ADMIN_PASSWORD, parseSeedEnv } from '../../prisma/seed/seed-env';
+import { PLACEHOLDER_PASSWORD as PLACEHOLDER_ADMIN_PASSWORD } from '../../src/common/policies/password-policy';
+import { parseSeedEnv } from '../../prisma/seed/seed-env';
 
 const BASE = {
   DATABASE_URL: 'postgresql://u:p@localhost:5432/db',

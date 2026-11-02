@@ -5,10 +5,10 @@ import {
   ArrayUnique,
   IsArray,
   IsNotEmpty,
-  IsOptional,
   IsString,
   MaxLength,
 } from 'class-validator';
+import { OptionalButNotNull } from '../../../common/validators/optional-not-null.decorator';
 import {
   MAX_PERMISSION_KEYS,
   PERMISSION_KEY_MAX_LENGTH,
@@ -23,13 +23,13 @@ export class UpdateRoleDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(ROLE_NAME_MAX_LENGTH)
-  @IsOptional()
+  @OptionalButNotNull()
   name?: string;
 
   @ApiPropertyOptional({ maxLength: ROLE_DESCRIPTION_MAX_LENGTH })
   @IsString()
   @MaxLength(ROLE_DESCRIPTION_MAX_LENGTH)
-  @IsOptional()
+  @OptionalButNotNull()
   description?: string;
 
   @ApiPropertyOptional({
@@ -41,6 +41,6 @@ export class UpdateRoleDto {
   @ArrayMaxSize(MAX_PERMISSION_KEYS)
   @IsString({ each: true })
   @MaxLength(PERMISSION_KEY_MAX_LENGTH, { each: true })
-  @IsOptional()
+  @OptionalButNotNull()
   permissionKeys?: string[];
 }

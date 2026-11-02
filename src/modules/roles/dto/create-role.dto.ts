@@ -5,10 +5,10 @@ import {
   ArrayUnique,
   IsArray,
   IsNotEmpty,
-  IsOptional,
   IsString,
   MaxLength,
 } from 'class-validator';
+import { OptionalButNotNull } from '../../../common/validators/optional-not-null.decorator';
 import {
   MAX_PERMISSION_KEYS,
   PERMISSION_KEY_MAX_LENGTH,
@@ -30,7 +30,7 @@ export class CreateRoleDto {
   @ApiPropertyOptional({ maxLength: ROLE_DESCRIPTION_MAX_LENGTH })
   @IsString()
   @MaxLength(ROLE_DESCRIPTION_MAX_LENGTH)
-  @IsOptional()
+  @OptionalButNotNull()
   description?: string;
 
   @ApiProperty({

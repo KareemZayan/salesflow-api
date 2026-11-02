@@ -1,4 +1,6 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { ERROR_CODES } from '../../common/constants/error-codes';
+import { DomainException } from '../../common/exceptions/domain.exception';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { resourceNotFound } from '../../common/exceptions/resource-not-found';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -45,6 +47,17 @@ export class LeadsService {
     const lead = await this.repository.findVisible(await this.ownership.resolve(actor), id);
     if (!lead) throw resourceNotFound('Lead');
     return lead;
+  }
+
+  // For modules that link their records to a lead (tasks). Nothing blocks deleting a lead, so no lock
+  // is needed. Missing, deleted, foreign and not-visible leads all give the same 400.
+  async assertLinkable(scope: VisibilityScope, leadId: string): Promise<void> {
+    if (await this.repository.findVisible(scope, leadId)) return;
+    throw new DomainException(
+      ERROR_CODES.INVALID_LEAD,
+      'The lead must be one you are allowed to link',
+      HttpStatus.BAD_REQUEST,
+    );
   }
 
   async create(actor: AuthenticatedUser, dto: CreateLeadDto): Promise<LeadRecord> {

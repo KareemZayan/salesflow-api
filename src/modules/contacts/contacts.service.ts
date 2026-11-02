@@ -133,6 +133,13 @@ export class ContactsService {
         HttpStatus.CONFLICT,
       );
     }
+    if (outcome === 'has-open-tasks') {
+      throw new DomainException(
+        ERROR_CODES.CONTACT_HAS_OPEN_TASKS,
+        'Contact has open tasks and cannot be deleted',
+        HttpStatus.CONFLICT,
+      );
+    }
   }
 
   private linkTo(scope: VisibilityScope, companyId: string): CompanyLink {

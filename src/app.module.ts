@@ -15,6 +15,7 @@ import { LeadsModule } from './modules/leads/leads.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { PipelinesModule } from './modules/pipelines/pipelines.module';
 import { RolesModule } from './modules/roles/roles.module';
+import { TasksModule } from './modules/tasks/tasks.module';
 import { UsersModule } from './modules/users/users.module';
 
 @Module({
@@ -39,6 +40,7 @@ import { UsersModule } from './modules/users/users.module';
     LeadsModule,
     PipelinesModule,
     DealsModule,
+    TasksModule,
   ],
 })
 export class AppModule {}

@@ -11,6 +11,7 @@ import { applyVisibility } from '../../common/visibility/ownership-filter';
 import { VisibilityScope } from '../../common/visibility/visibility.types';
 import { DealStatus, Prisma } from '../../generated/prisma/client';
 import { acquireLock } from '../../infrastructure/prisma/advisory-lock';
+import { OPEN_TASK_STATUSES } from '../tasks/tasks.constants';
 import { PRISMA_TENANT } from '../../infrastructure/prisma/prisma.constants';
 import { COMPANY_SEARCH_FIELDS, COMPANY_SORT_FIELDS } from './companies.constants';
 import { ListCompaniesQueryDto } from './dto/list-companies-query.dto';
@@ -40,7 +41,8 @@ export type CompanyChanges = Pick<
   'ownerId' | 'name' | 'domain' | 'industry' | 'phone' | 'address'
 >;
 
-export type DeleteOutcome = 'deleted' | 'not-found' | 'has-contacts' | 'has-deals';
+export type DeleteOutcome =
+  'deleted' | 'not-found' | 'has-contacts' | 'has-deals' | 'has-open-tasks';
 
 // The tenant client adds `organizationId` and `deletedAt: null` to every query below. Visibility is
 // ANDed into the same `where` as the read or write itself, so "may the caller touch this row?" and
@@ -113,7 +115,7 @@ export class CompaniesRepository {
   // contacts (the 409 must never confirm that an invisible company exists). The contact count is
   // tenant-scoped but deliberately NOT visibility-scoped: other users' contacts block the delete
   // too. `deletedAt: null` is explicit because the tenant extension does not filter nested
-  // relations (ADR 0002). The 'company' lock is what the contacts module takes before linking a
+  // relations (ADR 0002). Open tasks are counted like open deals (reported after them). The 'company' lock is what the contacts module takes before linking a
   // contact to this company, so a link and this delete can never interleave.
   async softDeleteIfUnused(scope: VisibilityScope, id: string): Promise<DeleteOutcome> {
     return this.prisma.$transaction(async (tx) => {
@@ -126,6 +128,8 @@ export class CompaniesRepository {
               contacts: { where: { deletedAt: null } },
               // OPEN deals only: closed ones keep just the id and do not pin the company.
               deals: { where: { deletedAt: null, status: DealStatus.OPEN } },
+              // OPEN / IN_PROGRESS tasks only: finished ones keep just the id.
+              tasks: { where: { status: { in: [...OPEN_TASK_STATUSES] } } },
             },
           },
         },
@@ -133,6 +137,7 @@ export class CompaniesRepository {
       if (!company) return 'not-found';
       if (company._count.contacts > 0) return 'has-contacts';
       if (company._count.deals > 0) return 'has-deals';
+      if (company._count.tasks > 0) return 'has-open-tasks';
       const deleted = await nullIfNotFound(
         tx.company.delete({
           where: { id, ...applyVisibility<Prisma.CompanyWhereInput>(undefined, scope) },

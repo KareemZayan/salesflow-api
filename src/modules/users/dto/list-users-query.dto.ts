@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
+import { queryBoolean } from '../../../common/utils/string-transform.util';
 import { SEARCH_MAX_LENGTH, USER_SORT_FIELDS } from '../users.constants';
 
 export class ListUsersQueryDto extends PaginationQueryDto {
@@ -25,9 +26,7 @@ export class ListUsersQueryDto extends PaginationQueryDto {
   managerId?: string;
 
   @ApiPropertyOptional()
-  @Transform(({ value }: { value: unknown }) =>
-    value === 'true' ? true : value === 'false' ? false : value,
-  )
+  @Transform(queryBoolean)
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;

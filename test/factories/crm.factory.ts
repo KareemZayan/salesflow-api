@@ -1,6 +1,12 @@
 import type { PrismaClient } from '../../prisma/seed/prisma-client';
 import { buildStageRows, type OpenStageInput } from '../../src/common/policies/pipeline-policy';
-import type { DealStatus, LeadSource, LeadStatus } from '../../src/generated/prisma/client';
+import type {
+  DealStatus,
+  LeadSource,
+  LeadStatus,
+  TaskPriority,
+  TaskStatus,
+} from '../../src/generated/prisma/client';
 
 let sequence = 0;
 
@@ -117,6 +123,35 @@ export function createDeal(
       title: `Deal ${++sequence}`,
       currency: 'USD',
       ...placement,
+      ...overrides,
+    },
+  });
+}
+
+export function createTask(
+  prisma: PrismaClient,
+  { organizationId, assigneeId }: { organizationId: string; assigneeId: string },
+  overrides: {
+    createdById?: string;
+    title?: string;
+    status?: TaskStatus;
+    priority?: TaskPriority;
+    dueDate?: Date;
+    completedAt?: Date;
+    reminderAt?: Date;
+    reminderSentAt?: Date;
+    leadId?: string;
+    dealId?: string;
+    contactId?: string;
+    companyId?: string;
+  } = {},
+) {
+  return prisma.task.create({
+    data: {
+      organizationId,
+      assigneeId,
+      createdById: assigneeId,
+      title: `Task ${++sequence}`,
       ...overrides,
     },
   });

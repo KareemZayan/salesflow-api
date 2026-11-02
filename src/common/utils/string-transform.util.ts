@@ -21,6 +21,11 @@ export const trimLowerToNull = ({ value }: TransformParams): unknown => {
   return typeof trimmed === 'string' ? trimmed.toLowerCase() : trimmed;
 };
 
+// For boolean query-string filters: "true" / "false" become booleans, anything else is left for
+// @IsBoolean() to reject.
+export const queryBoolean = ({ value }: TransformParams): unknown =>
+  value === 'true' ? true : value === 'false' ? false : value;
+
 // For optional filters: surrounding spaces are noise, and a blank value means "no filter".
 export const trimToUndefined = ({ value }: TransformParams): unknown => {
   const trimmed = trimString({ value });

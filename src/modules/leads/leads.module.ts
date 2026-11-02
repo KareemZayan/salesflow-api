@@ -13,6 +13,7 @@ import { RuleBasedLeadScoringStrategy } from './scoring/rule-based-lead-scoring.
 @Module({
   imports: [VisibilityModule, CompaniesModule, ContactsModule, DealsModule],
   controllers: [LeadsController],
+  exports: [LeadsService],
   providers: [
     LeadsService,
     LeadConversionService,

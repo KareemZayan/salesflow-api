@@ -490,6 +490,7 @@ describe('Users (e2e)', () => {
     let support: Tokens;
     let supportUser: TestUser;
     let secondAdmin: TestUser;
+    let supportRoleId: string;
 
     beforeEach(async () => {
       const role = await createCustomRole(prisma, orgA, 'SUPPORT', [
@@ -497,6 +498,7 @@ describe('Users (e2e)', () => {
         'users:create',
         'users:update',
       ]);
+      supportRoleId = role.id;
       supportUser = await createUser(prisma, orgA, { role: role.name });
       support = await signIn(supportUser);
       secondAdmin = await createUser(prisma, orgA, { role: ROLE_NAMES.ADMIN });
@@ -547,10 +549,41 @@ describe('Users (e2e)', () => {
       expect(created.body.code).toBe('ADMIN_REQUIRED');
     });
 
-    it('can still manage non-admin users', async () => {
+    it('can still manage non-admin users, assigning only roles it fully holds', async () => {
       const rep = await createUser(prisma, orgA);
-      await http().post(`${API}/users`).set(as(support)).send(createBody()).expect(201);
+      await http()
+        .post(`${API}/users`)
+        .set(as(support))
+        .send(createBody({ roleId: supportRoleId }))
+        .expect(201);
       await http().post(`${API}/users/${rep.id}/deactivate`).set(as(support)).expect(200);
+    });
+
+    it('cannot assign a role with permissions it lacks, on create or update, to self or others', async () => {
+      const rep = await createUser(prisma, orgA);
+      const richRole = roles[ROLE_NAMES.SALES_REP]; // CRM permissions the support role does not hold
+
+      const created = await http()
+        .post(`${API}/users`)
+        .set(as(support))
+        .send(createBody({ roleId: richRole }))
+        .expect(403);
+      expect(created.body.code).toBe('CANNOT_GRANT_PERMISSION');
+
+      const toOther = await http()
+        .patch(`${API}/users/${rep.id}`)
+        .set(as(support))
+        .send({ roleId: roles[ROLE_NAMES.SALES_MANAGER] })
+        .expect(403);
+      expect(toOther.body.code).toBe('CANNOT_GRANT_PERMISSION');
+
+      await http()
+        .patch(`${API}/users/${supportUser.id}`)
+        .set(as(support))
+        .send({ roleId: richRole })
+        .expect(403);
+      expect((await row(rep.id)).roleId).toBe(roles[ROLE_NAMES.SALES_REP]);
+      expect((await row(supportUser.id)).roleId).toBe(supportRoleId);
     });
   });
 

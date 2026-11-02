@@ -94,10 +94,30 @@ describe('database schema and seed (integration)', () => {
 
       expect(await prisma.pipeline.count()).toBe(1);
       expect((await prisma.pipeline.findFirstOrThrow()).name).toBe('Renamed');
-      // Missing grants are restored, never duplicated.
+      // ADMIN is kept in sync with the catalogue: missing grants are restored, never duplicated.
       expect(await prisma.rolePermission.count({ where: { role: { name: 'ADMIN' } } })).toBe(
         Object.keys(PERMISSIONS).length,
       );
+    });
+
+    it('does not re-grant permissions an admin removed from the other system roles', async () => {
+      await seedCore();
+      const removed = await prisma.rolePermission.findFirstOrThrow({
+        where: { role: { name: 'SALES_REP' }, permission: { key: 'leads:delete' } },
+      });
+      await prisma.rolePermission.delete({ where: { roleId_permissionId: removed } });
+      const before = await prisma.rolePermission.count({ where: { role: { name: 'SALES_REP' } } });
+
+      await seedCore();
+
+      expect(await prisma.rolePermission.count({ where: { role: { name: 'SALES_REP' } } })).toBe(
+        before,
+      );
+      expect(
+        await prisma.rolePermission.count({
+          where: { role: { name: 'SALES_REP' }, permission: { key: 'leads:delete' } },
+        }),
+      ).toBe(0);
     });
 
     it('refuses an admin email that belongs to another organization', async () => {

@@ -4,6 +4,7 @@ import { ADMIN_ROLE_NAME } from '../../common/constants/roles';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { DomainException } from '../../common/exceptions/domain.exception';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { assertMayGrant } from '../../common/utils/permission-escalation.util';
 import { isUniqueViolation } from '../../common/utils/prisma-error.util';
 import { PasswordService } from '../auth/password.service';
 import { SessionRevoker } from '../auth/session-revoker.service';
@@ -12,7 +13,7 @@ import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { MAX_MANAGER_DEPTH } from './users.constants';
-import { UserChanges, UserRecord, UsersRepository, UsersTx } from './users.repository';
+import { RoleRef, UserChanges, UserRecord, UsersRepository, UsersTx } from './users.repository';
 
 // Structured log events stand in for the audit trail until Phase 13. They carry ids only, never
 // credentials.
@@ -50,7 +51,7 @@ export class UsersService {
     const user = await this.guardEmail(() =>
       this.repository.withOrgLock(actor.organizationId, async (tx) => {
         const role = await this.requireRole(dto.roleId, tx);
-        this.assertAdminRoleAllowed(actor, role.name);
+        this.assertMayAssignRole(actor, role);
         if (dto.managerId) await this.assertManagerAssignable(dto.managerId, undefined, tx);
         return this.repository.create(
           {
@@ -91,7 +92,7 @@ export class UsersService {
             );
           }
           const role = await this.requireRole(dto.roleId, tx);
-          this.assertAdminRoleAllowed(actor, role.name);
+          this.assertMayAssignRole(actor, role);
           if (target.role.name === ADMIN_ROLE_NAME && role.name !== ADMIN_ROLE_NAME) {
             await this.assertAdminCanBeRemoved(target, tx);
           }
@@ -204,6 +205,13 @@ export class UsersService {
     }
   }
 
+  // Assigning a role grants all of its permissions, so the caller must hold them all (or be ADMIN):
+  // otherwise a user manager could promote anyone, themselves included, past their own power.
+  private assertMayAssignRole(actor: AuthenticatedUser, role: RoleRef): void {
+    this.assertAdminRoleAllowed(actor, role.name);
+    assertMayGrant(actor, role.permissionKeys);
+  }
+
   // Call only for an ADMIN that is about to stop being one (deactivation or demotion). Must run
   // under the organization lock, otherwise two admins removing each other could both pass.
   private async assertAdminCanBeRemoved(target: UserRecord, tx: UsersTx): Promise<void> {
@@ -248,7 +256,7 @@ export class UsersService {
     return user;
   }
 
-  private async requireRole(roleId: string, tx: UsersTx): Promise<{ id: string; name: string }> {
+  private async requireRole(roleId: string, tx: UsersTx): Promise<RoleRef> {
     const role = await this.repository.findRole(roleId, tx);
     if (!role) {
       throw new DomainException(ERROR_CODES.INVALID_ROLE, 'Role not found', HttpStatus.BAD_REQUEST);

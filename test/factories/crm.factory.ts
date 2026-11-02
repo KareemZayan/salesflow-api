@@ -1,5 +1,5 @@
 import type { PrismaClient } from '../../prisma/seed/prisma-client';
-import type { LeadSource } from '../../src/generated/prisma/client';
+import type { LeadSource, LeadStatus } from '../../src/generated/prisma/client';
 
 let sequence = 0;
 
@@ -45,6 +45,7 @@ export function createLead(
     phone?: string;
     companyName?: string;
     source?: LeadSource;
+    status?: LeadStatus;
     score?: number;
     notes?: string;
     deletedAt?: Date;

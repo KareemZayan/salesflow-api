@@ -586,6 +586,282 @@ describe('Leads (e2e)', () => {
     });
   });
 
+  describe('status', () => {
+    type Status = 'NEW' | 'CONTACTED' | 'QUALIFIED' | 'UNQUALIFIED' | 'CONVERTED';
+    const ALLOWED: Record<Status, Status[]> = {
+      NEW: ['CONTACTED', 'UNQUALIFIED'],
+      CONTACTED: ['QUALIFIED', 'UNQUALIFIED'],
+      QUALIFIED: ['UNQUALIFIED'],
+      UNQUALIFIED: ['CONTACTED'],
+      CONVERTED: [],
+    };
+    const SETTABLE: Status[] = ['NEW', 'CONTACTED', 'QUALIFIED', 'UNQUALIFIED'];
+    const move = (tokens: Tokens, id: string, body: object) =>
+      http().post(`${API}/${id}/status`).set(as(tokens)).send(body);
+    // 77 is not what the rules would compute for these leads: any recomputation would show.
+    const leadIn = (status: Status, owner: TestUser = report) =>
+      createLead(prisma, owned(orgA, owner), { status, score: 77 });
+
+    it('401 without a token; 403 without leads:update', async () => {
+      const lead = await leadIn('NEW', nobody);
+      await http().post(`${API}/${lead.id}/status`).send({ status: 'CONTACTED' }).expect(401);
+      const res = await move(await signIn(nobody), lead.id, { status: 'CONTACTED' }).expect(403);
+      expect(res.body.code).toBe('FORBIDDEN');
+    });
+
+    for (const from of Object.keys(ALLOWED) as Status[]) {
+      it(`from ${from}: only ${ALLOWED[from].join(', ') || 'nothing'} is possible`, async () => {
+        for (const to of SETTABLE) {
+          const lead = await leadIn(from);
+          const before = await row(lead.id);
+          const res = await move(reportT, lead.id, { status: to });
+          const after = await row(lead.id);
+
+          if (ALLOWED[from].includes(to)) {
+            expect(res.status, `${from} -> ${to}`).toBe(200);
+            expect(res.body).toMatchObject({ id: lead.id, status: to, score: 77 });
+            expect(after.status).toBe(to);
+            expect(after.score).toBe(77);
+            expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+          } else {
+            // Rejected: status, score and updatedAt are exactly as they were.
+            expect(res.status, `${from} -> ${to}`).toBe(409);
+            expect(res.body.code).toBe(
+              from === 'CONVERTED' ? 'LEAD_ALREADY_CONVERTED' : 'INVALID_STATUS_TRANSITION',
+            );
+            expect(after.status).toBe(from);
+            expect(after.score).toBe(77);
+            expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+          }
+        }
+      });
+    }
+
+    it('a full lifecycle, including the reopen back to CONTACTED', async () => {
+      const lead = await leadIn('NEW');
+      for (const status of ['CONTACTED', 'QUALIFIED', 'UNQUALIFIED', 'CONTACTED', 'QUALIFIED']) {
+        expect((await move(reportT, lead.id, { status }).expect(200)).body.status).toBe(status);
+      }
+    });
+
+    it('retrying an already-applied change is 409 (not idempotent): GET to confirm', async () => {
+      const lead = await leadIn('NEW');
+      await move(reportT, lead.id, { status: 'CONTACTED' }).expect(200);
+      const retry = await move(reportT, lead.id, { status: 'CONTACTED' }).expect(409);
+      expect(retry.body.code).toBe('INVALID_STATUS_TRANSITION');
+      const current = await http().get(`${API}/${lead.id}`).set(as(reportT)).expect(200);
+      expect(current.body.status).toBe('CONTACTED');
+    });
+
+    it('400 for CONVERTED, an unknown status, a missing status or a bad id', async () => {
+      const lead = await leadIn('NEW');
+      for (const body of [{ status: 'CONVERTED' }, { status: 'DONE' }, { status: null }, {}]) {
+        const res = await move(reportT, lead.id, body).expect(400);
+        expect(res.body.code).toBe('VALIDATION_FAILED');
+      }
+      await move(reportT, 'nope', { status: 'CONTACTED' }).expect(400);
+      expect((await row(lead.id)).status).toBe('NEW');
+    });
+
+    it('400 for any field besides `status`: the client never supplies `from`, score, owner or conversion data', async () => {
+      const lead = await leadIn('NEW');
+      for (const extra of [
+        { from: 'NEW' },
+        { from: 'CONVERTED' },
+        { convertedAt: '2020-01-01T00:00:00.000Z' },
+        { score: 100 },
+        { ownerId: repX.id },
+        { organizationId: orgB.id },
+        { convertedContactId: MISSING_ID },
+      ]) {
+        const res = await move(reportT, lead.id, { status: 'CONTACTED', ...extra }).expect(400);
+        expect(res.body.code).toBe('VALIDATION_FAILED');
+      }
+      expect(await row(lead.id)).toMatchObject({
+        status: 'NEW',
+        score: 77,
+        ownerId: report.id,
+        convertedAt: null,
+      });
+    });
+
+    it('the status does not change the score and takes no lead lock', async () => {
+      const lead = await leadIn('NEW');
+      let release!: () => void;
+      let acquired!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const held = new Promise<void>((resolve) => (acquired = resolve));
+      const holder = prisma.$transaction(
+        async (tx) => {
+          await acquireLock(tx, 'lead', lead.id);
+          acquired();
+          await gate;
+        },
+        { timeout: 30_000 },
+      );
+      await held;
+      try {
+        // Would hang until the lock is released if the status change took it.
+        const res = await move(reportT, lead.id, { status: 'CONTACTED' }).expect(200);
+        expect(res.body.score).toBe(77);
+      } finally {
+        release();
+        await holder;
+      }
+    });
+
+    describe('visibility', () => {
+      it('a rep changes their own lead; a manager the lead of a direct report; an admin any', async () => {
+        await move(reportT, (await leadIn('NEW')).id, { status: 'CONTACTED' }).expect(200);
+        await move(managerT, (await leadIn('NEW', report)).id, { status: 'CONTACTED' }).expect(200);
+        await move(managerT, (await leadIn('NEW', manager)).id, { status: 'CONTACTED' }).expect(
+          200,
+        );
+        await move(adminT, (await leadIn('NEW', repX)).id, { status: 'CONTACTED' }).expect(200);
+      });
+
+      it('a manager cannot change a lead owned by someone outside the team: 404, untouched', async () => {
+        const lead = await leadIn('NEW', repX);
+        const res = await move(managerT, lead.id, { status: 'CONTACTED' }).expect(404);
+        expect(res.body.code).toBe('RESOURCE_NOT_FOUND');
+        expect((await row(lead.id)).status).toBe('NEW');
+      });
+
+      it('a rep cannot change a colleague lead, a missing, deleted or other-organization one: all 404', async () => {
+        const theirs = await leadIn('NEW', repX);
+        const deleted = await createLead(prisma, owned(orgA, report), { deletedAt: new Date() });
+        const foreign = await createLead(prisma, owned(orgB, repB));
+        for (const id of [theirs.id, MISSING_ID, deleted.id, foreign.id]) {
+          const res = await move(reportT, id, { status: 'CONTACTED' }).expect(404);
+          expect(res.body.code).toBe('RESOURCE_NOT_FOUND');
+        }
+        expect((await row(theirs.id)).status).toBe('NEW');
+        expect((await row(foreign.id)).status).toBe('NEW');
+      });
+
+      it('an invisible CONVERTED lead is 404, never 409 (its state is not revealed)', async () => {
+        const theirs = await leadIn('CONVERTED', repX);
+        const foreign = await createLead(prisma, owned(orgB, repB), { status: 'CONVERTED' });
+        await move(reportT, theirs.id, { status: 'CONTACTED' }).expect(404);
+        await move(managerT, theirs.id, { status: 'CONTACTED' }).expect(404);
+        await move(adminT, foreign.id, { status: 'CONTACTED' }).expect(404);
+        // ...while the same lead is a 409 for someone who can see it.
+        await move(adminT, theirs.id, { status: 'CONTACTED' }).expect(409);
+      });
+
+      it('after a transfer away, the previous owner gets 404', async () => {
+        const lead = await leadIn('NEW');
+        await patch(adminT, lead.id, { ownerId: repX.id }).expect(200);
+        await move(reportT, lead.id, { status: 'CONTACTED' }).expect(404);
+      });
+    });
+
+    // Without the `status = from` guard on the write, two requests that both read NEW would both
+    // return 200 and the last write would win silently.
+    describe('concurrent changes (compare-and-set)', () => {
+      // Two different targets can legitimately BOTH succeed when one request finishes before the
+      // other starts (NEW -> CONTACTED, then CONTACTED -> UNQUALIFIED), so this asserts the invariant
+      // rather than one outcome: a 409 is always INVALID_STATUS_TRANSITION and means the stored
+      // status is the other request's target; two 200s mean the requests ran one after the other.
+      it('NEW -> CONTACTED racing NEW -> UNQUALIFIED never loses or invents an update', async () => {
+        for (let i = 0; i < RACE_ITERATIONS; i += 1) {
+          const lead = await leadIn('NEW');
+          const targets: Status[] = ['CONTACTED', 'UNQUALIFIED'];
+          const results = await Promise.all(
+            targets.map((status) => move(reportT, lead.id, { status })),
+          );
+          const stored = (await row(lead.id)).status as Status;
+          const codes = results.map((res) => res.status);
+          expect(codes.every((code) => code === 200 || code === 409)).toBe(true);
+          expect(codes).toContain(200);
+          expect(targets).toContain(stored);
+          if (codes.includes(409)) {
+            expect(results.find((res) => res.status === 409)?.body.code).toBe(
+              'INVALID_STATUS_TRANSITION',
+            );
+            expect(stored).toBe(targets[results.findIndex((res) => res.status === 200)]);
+          }
+        }
+      });
+
+      // Deterministic: whichever runs second finds CONTACTED, and CONTACTED -> CONTACTED is never
+      // allowed. This is the test that fails when the compare-and-set guard is removed.
+      it('the same change sent twice at once is applied once', async () => {
+        for (let i = 0; i < RACE_ITERATIONS; i += 1) {
+          const lead = await leadIn('NEW');
+          const results = await Promise.all([
+            move(reportT, lead.id, { status: 'CONTACTED' }),
+            move(reportT, lead.id, { status: 'CONTACTED' }),
+          ]);
+          expect(results.map((res) => res.status).sort()).toEqual([200, 409]);
+        }
+      });
+    });
+  });
+
+  describe('converted leads are final', () => {
+    const converted = () =>
+      createLead(prisma, owned(orgA, report), { status: 'CONVERTED', score: 55, notes: 'kept' });
+
+    it('PATCH is 409 LEAD_ALREADY_CONVERTED for every kind of change, and nothing is written', async () => {
+      const lead = await converted();
+      for (const [tokens, body] of [
+        [reportT, { notes: 'edited' }],
+        [reportT, { firstName: 'Edited' }],
+        [reportT, { email: 'a@b.co' }], // a scoring field: no recompute either
+        [reportT, { source: 'REFERRAL' }],
+        [managerT, { notes: 'edited' }],
+        [adminT, { ownerId: repX.id }], // owner transfer is blocked too (ADR 0008)
+        [adminT, { ownerId: repX.id, notes: 'edited' }],
+      ] as [Tokens, object][]) {
+        const res = await patch(tokens, lead.id, body).expect(409);
+        expect(res.body.code).toBe('LEAD_ALREADY_CONVERTED');
+      }
+      expect(await row(lead.id)).toMatchObject({
+        notes: 'kept',
+        email: null,
+        score: 55,
+        ownerId: report.id,
+        firstName: 'Lead',
+      });
+    });
+
+    it('an empty PATCH is 400 EMPTY_UPDATE, before the 409 is considered', async () => {
+      const lead = await converted();
+      expect((await patch(reportT, lead.id, {}).expect(400)).body.code).toBe('EMPTY_UPDATE');
+    });
+
+    it('a bad body is 400 VALIDATION_FAILED, not 409', async () => {
+      const lead = await converted();
+      expect((await patch(reportT, lead.id, { score: 1 }).expect(400)).body.code).toBe(
+        'VALIDATION_FAILED',
+      );
+    });
+
+    it('DELETE is 409 and the lead stays', async () => {
+      const lead = await converted();
+      const res = await http().delete(`${API}/${lead.id}`).set(as(reportT)).expect(409);
+      expect(res.body.code).toBe('LEAD_ALREADY_CONVERTED');
+      expect((await row(lead.id)).deletedAt).toBeNull();
+    });
+
+    it('a converted lead the caller cannot see answers 404 to PATCH and DELETE', async () => {
+      const lead = await converted();
+      await patch(repXT, lead.id, { notes: 'x' }).expect(404);
+      await patch(repBT, lead.id, { notes: 'x' }).expect(404);
+      await http().delete(`${API}/${lead.id}`).set(as(repXT)).expect(404);
+      await http().delete(`${API}/${lead.id}`).set(as(repBT)).expect(404);
+    });
+
+    it('it can still be read, listed and filtered', async () => {
+      const lead = await converted();
+      const got = await http().get(`${API}/${lead.id}`).set(as(reportT)).expect(200);
+      expect(got.body.status).toBe('CONVERTED');
+      const list = await http().get(`${API}?status=CONVERTED`).set(as(reportT)).expect(200);
+      expect(ids(list)).toEqual([lead.id]);
+    });
+  });
+
   describe('tenant isolation', () => {
     it('organization B can never read, update, delete or list organization A leads', async () => {
       const lead = await createLead(prisma, owned(orgA, report));

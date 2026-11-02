@@ -3,11 +3,21 @@ import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { resourceNotFound } from '../../common/exceptions/resource-not-found';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { assertHasChanges } from '../../common/utils/assert-has-changes.util';
+import { applyStatusTransition } from '../../common/utils/status-transition.util';
 import { ownerForCreate, ownerForTransfer } from '../../common/visibility/owner-assignment';
 import { OwnershipScopeService } from '../../common/visibility/ownership-scope.service';
+import { VisibilityScope } from '../../common/visibility/visibility.types';
+import { LeadStatus } from '../../generated/prisma/client';
+import { ChangeLeadStatusDto } from './dto/change-lead-status.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
+import { LEAD_STATUS_TRANSITIONS } from './lead-status-transitions';
+import {
+  LeadAlreadyConvertedException,
+  concurrentLeadStatusChange,
+  rejectedLeadTransition,
+} from './leads.exceptions';
 import { LeadChanges, LeadRecord, LeadsRepository, Rescore } from './leads.repository';
 import {
   LEAD_SCORING_STRATEGY,
@@ -62,19 +72,51 @@ export class LeadsService {
     if (ownerId !== undefined) {
       const current = await this.repository.findVisible(scope, id);
       if (!current) throw resourceNotFound('Lead');
+      // Say "converted" before judging the new owner: the lead is final whoever it goes to.
+      if (current.status === LeadStatus.CONVERTED) throw new LeadAlreadyConvertedException();
       changes.ownerId = await ownerForTransfer(this.ownership, scope, ownerId, current.ownerId);
     }
 
     // The write carries the visibility filter itself: if the lead was reassigned away from the
     // caller after the read above, it matches nothing and the answer is the same 404.
     const updated = await this.repository.updateVisible(scope, id, changes, this.rescoreFor(dto));
-    if (!updated) throw resourceNotFound('Lead');
+    if (!updated) throw await this.whyNotEditable(scope, id);
     return updated;
   }
 
+  // Moves the lead along LEAD_STATUS_TRANSITIONS. The score is deliberately not recomputed: it
+  // describes the lead's attributes and `status` is not one of SCORING_FIELDS (ADR 0008).
+  async changeStatus(
+    actor: AuthenticatedUser,
+    id: string,
+    { status }: ChangeLeadStatusDto,
+  ): Promise<LeadRecord> {
+    const scope = await this.ownership.resolve(actor);
+    return applyStatusTransition({
+      map: LEAD_STATUS_TRANSITIONS,
+      to: status,
+      read: () => this.repository.findVisible(scope, id),
+      write: (from) => this.repository.transitionStatus(scope, id, from, status),
+      notFound: () => resourceNotFound('Lead'),
+      rejected: rejectedLeadTransition,
+      changedConcurrently: concurrentLeadStatusChange,
+    });
+  }
+
   async delete(actor: AuthenticatedUser, id: string): Promise<void> {
-    const deleted = await this.repository.deleteVisible(await this.ownership.resolve(actor), id);
-    if (!deleted) throw resourceNotFound('Lead');
+    const scope = await this.ownership.resolve(actor);
+    const deleted = await this.repository.deleteVisible(scope, id);
+    if (!deleted) throw await this.whyNotEditable(scope, id);
+  }
+
+  // An update or delete matched nothing. Look again WITH the caller's visibility: a lead they can
+  // see and that is CONVERTED answers 409; everything else (missing, deleted, other tenant, not
+  // theirs, reassigned away) is the one 404, so a hidden converted lead is never revealed.
+  private async whyNotEditable(scope: VisibilityScope, id: string): Promise<Error> {
+    const lead = await this.repository.findVisible(scope, id);
+    return lead?.status === LeadStatus.CONVERTED
+      ? new LeadAlreadyConvertedException()
+      : resourceNotFound('Lead');
   }
 
   // Only a change to a scoring field needs a new score (and, in the repository, the lead lock):

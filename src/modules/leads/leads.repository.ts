@@ -9,7 +9,7 @@ import { nullIfNotFound } from '../../common/utils/prisma-error.util';
 import { containsAny } from '../../common/utils/search.util';
 import { applyVisibility } from '../../common/visibility/ownership-filter';
 import { VisibilityScope } from '../../common/visibility/visibility.types';
-import { Prisma } from '../../generated/prisma/client';
+import { LeadStatus, Prisma } from '../../generated/prisma/client';
 import { acquireLock } from '../../infrastructure/prisma/advisory-lock';
 import { PRISMA_TENANT } from '../../infrastructure/prisma/prisma.constants';
 import { LEAD_SEARCH_FIELDS, LEAD_SORT_FIELDS } from './leads.constants';
@@ -70,6 +70,10 @@ export type Rescore = (current: LeadScoringInput) => number;
 
 type LeadDb = Pick<TenantTransactionClient, 'lead'>;
 
+// A converted lead is final: edits and deletes carry this in their where, in the same statement as
+// the write, so a conversion committed a moment earlier makes them match nothing.
+const notConverted = { status: { not: LeadStatus.CONVERTED } } satisfies Prisma.LeadWhereInput;
+
 // The tenant client adds `organizationId` and `deletedAt: null` to every query below. Visibility is
 // ANDed into the same `where` as the read or write itself, so "may the caller touch this row?" and
 // "touch it" are ONE statement.
@@ -109,8 +113,9 @@ export class LeadsRepository {
     return this.prisma.lead.create({ data, select: leadSelect });
   }
 
-  // `null` = no such lead for this caller (missing, deleted, other tenant, not visible, or
-  // reassigned away from the caller after they loaded it). The caller answers 404 for all.
+  // `null` = no such editable lead for this caller (missing, deleted, other tenant, not visible,
+  // reassigned away from the caller after they loaded it, or CONVERTED). The service looks again,
+  // with visibility, to answer 404 or LEAD_ALREADY_CONVERTED.
   //
   // With `rescore` the score depends on the stored scoring fields merged with the changes, so it is
   // "read, compute, write": that must not interleave with another update of the same lead (two
@@ -127,7 +132,11 @@ export class LeadsRepository {
     const write = (db: LeadDb, data: LeadChanges & { score?: number }) =>
       nullIfNotFound(
         db.lead.update({
-          where: { id, ...applyVisibility<Prisma.LeadWhereInput>(undefined, scope) },
+          where: {
+            id,
+            ...notConverted,
+            ...applyVisibility<Prisma.LeadWhereInput>(undefined, scope),
+          },
           data,
           select: leadSelect,
         }),
@@ -137,7 +146,7 @@ export class LeadsRepository {
     return this.prisma.$transaction(async (tx) => {
       await acquireLock(tx, 'lead', id);
       const current = await tx.lead.findFirst({
-        where: applyVisibility<Prisma.LeadWhereInput>({ id }, scope),
+        where: applyVisibility<Prisma.LeadWhereInput>({ id, ...notConverted }, scope),
         select: scoringSelect,
       });
       if (!current) return null;
@@ -145,11 +154,31 @@ export class LeadsRepository {
     });
   }
 
-  // Soft delete (the tenant client turns `delete` into setting `deletedAt`).
+  // The compare-and-set of a status change: matches only while the lead still has the status the
+  // caller read (`from`), so a concurrent change or conversion makes it match nothing (`null`).
+  // `from` must come from a server-side read, never from the request. The score is not touched: it
+  // does not depend on the status (ADR 0008).
+  transitionStatus(
+    scope: VisibilityScope,
+    id: string,
+    from: LeadStatus,
+    to: LeadStatus,
+  ): Promise<LeadRecord | null> {
+    return nullIfNotFound(
+      this.prisma.lead.update({
+        where: { id, status: from, ...applyVisibility<Prisma.LeadWhereInput>(undefined, scope) },
+        data: { status: to },
+        select: leadSelect,
+      }),
+    );
+  }
+
+  // Soft delete (the tenant client turns `delete` into setting `deletedAt`). `false` = nothing
+  // deletable (same reasons as updateVisible).
   async deleteVisible(scope: VisibilityScope, id: string): Promise<boolean> {
     const deleted = await nullIfNotFound(
       this.prisma.lead.delete({
-        where: { id, ...applyVisibility<Prisma.LeadWhereInput>(undefined, scope) },
+        where: { id, ...notConverted, ...applyVisibility<Prisma.LeadWhereInput>(undefined, scope) },
         select: { id: true },
       }),
     );

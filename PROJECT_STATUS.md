@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 8a — Leads CRUD + scoring — done, awaiting your review/commit (branch `feat/phase-8a-leads-crud`). Next: Phase 8b status workflow (branch `feat/phase-8b-lead-status`, only when you ask).
+Phase 8b — Lead status workflow — done, awaiting your review/commit (branch `feat/phase-8b-lead-status`). Next: Phase 9 Lead conversion (only when you ask).
 
 ## Completed phases
 
@@ -21,6 +21,7 @@ Phase 8a — Leads CRUD + scoring — done, awaiting your review/commit (branch 
 - Phase 7a — Companies (CRUD, visibility-scoped lists, keyed advisory lock, `resolveAssignableOwner`, shared search/patch helpers) ✅ (2026-11-02)
 - Phase 7b — Contacts (CRUD, company link under the company lock, `INVALID_COMPANY`, shared helpers extracted from Companies) ✅ (2026-11-02)
 - Phase 8a — Leads (CRUD, sources, assignment, rule-based scoring via Strategy, `lead` advisory lock, ADR 0008) ✅ (2026-11-02)
+- Phase 8b — Lead status workflow (`POST /leads/:id/status`, shared `applyStatusTransition` compare-and-set, converted leads final) ✅ (2026-11-02)
 
 ## Decisions log
 
@@ -85,7 +86,10 @@ Phase 8a — Leads CRUD + scoring — done, awaiting your review/commit (branch 
 - 2026-11-02 — Extracted before Contacts (own commit, 7a tests untouched and green): `queryPage` (plain function; 7a used `Promise.all`, kept), `nullIfNotFound` (P2025 only), `ownerForCreate` / `ownerForTransfer` (free functions in `common/visibility/owner-assignment.ts`; NOT methods on `OwnershipScopeService`, because the unmodified 7a spec mocks that class with only `resolve`/`resolveAssignableOwner`), `resourceNotFound(entity)`, `trimLowerToNull` (replaces `normalizeDomain`)
 - 2026-11-02 — 8a design in ADR 0008: **null-owner rule = no ownerless leads** (`ownerId` stays NOT NULL; unassigned pool = nullable owner + claim + third `applyVisibility` branch is the upgrade path; this closes the 6c "ownerless records" question). Score is server-computed, stored, never client-writable (400 via forbidNonWhitelisted). Weights are adjustable defaults in ONE object `LEAD_SCORE_WEIGHTS` (source 0-40, explicit per source; email +20, phone +15, companyName +10; rounded + clamped 0-100). `SCORING_FIELDS` is the single field list (strategy input type, recompute `select`, service decision). Blank email/phone/companyName = NULL = no points
 - 2026-11-02 — Lead lock: only an update that changes a SCORING field runs in a tx with `acquireLock(tx,'lead',id)` + read-merge-compute-write; owner/name/notes changes take no lock and never touch the score. Lock order documented in `advisory-lock.ts` and ADR 0008: **org, then lead, then company** (Phase 9 conversion takes the lead lock first). Race + "no lock for non-scoring" tests were verified to fail with the lock removed
-- 2026-11-02 — 8b decisions recorded now (ADR 0008): transitions `NEW->CONTACTED|UNQUALIFIED`, `CONTACTED->QUALIFIED|UNQUALIFIED`, `QUALIFIED->UNQUALIFIED`, `UNQUALIFIED->CONTACTED` (reopen returns to CONTACTED: already contacted, and must be re-evaluated rather than silently re-qualified); **status is excluded from the score** (UNQUALIFIED does not zero it; if status ever enters the score, recompute inside the compare-and-set tx under the lead lock and add it to `SCORING_FIELDS`); compare-and-set -> `409 INVALID_STATUS_TRANSITION`; converted leads read-only (`409 LEAD_ALREADY_CONVERTED`); any 404-vs-409 lookup must respect visibility
+- 2026-11-02 — 8b design in ADR 0008: `POST /leads/:id/status` body `{status}` only (extra fields incl. `from` = 400; `CONVERTED` as target = 400). Map: `NEW->CONTACTED|UNQUALIFIED`, `CONTACTED->QUALIFIED|UNQUALIFIED`, `QUALIFIED->UNQUALIFIED`, `UNQUALIFIED->CONTACTED` (reopen returns to CONTACTED: already contacted, must be re-evaluated, not silently re-qualified). Same status = `409 INVALID_STATUS_TRANSITION`; the call is NOT idempotent (retry of an applied change = 409; client GETs to confirm; documented in Swagger + ADR). **Status is excluded from the score** (no recompute, no lock; `status` not in `SCORING_FIELDS`, guarded by a unit test; if it ever joins the score: recompute inside the CAS tx under the lead lock)
+- 2026-11-02 — **Shared helper `common/utils/status-transition.util.ts`** (`TransitionMap<S>`, `isTransitionAllowed`, `applyStatusTransition`): read with visibility -> map check -> ONE conditional update with `status = read value` -> on a miss re-read with visibility (null = 404, else a conflict naming the new status). Deals (Phase 10) and Tasks (Phase 11) MUST reuse it with their own map + exceptions; do not copy the logic. Leads wiring: `lead-status-transitions.ts`, `leads.exceptions.ts`, `LeadsRepository.transitionStatus`
+- 2026-11-02 — Converted leads are final: PATCH (owner transfer included) and DELETE put `status != CONVERTED` in the same where as the write; a miss re-reads with visibility -> visible+CONVERTED = `409 LEAD_ALREADY_CONVERTED`, else 404 (an invisible converted lead is always 404); GET/list still work; empty PATCH is 400 first. Two 409 codes for the frontend: `LEAD_ALREADY_CONVERTED` (freeze the record, read-only) vs `INVALID_STATUS_TRANSITION` (GET and refresh, offer valid moves). Phase 9 decides any exception to the owner-transfer block
+- 2026-11-02 — **Deferred to Phase 13 (Activities):** `LeadStatusHistory` (who/from/to/when) via a `lead.status_changed` domain event; not built in 8b to avoid a table that Activities will duplicate. Until then `updatedAt` is the only trace of a status change
 - **TODO Phase 10/11:** decide what open deals / tasks mean for deleting a contact (block with 409? unlink?) and add the check to `ContactsRepository.deleteVisible`
 - **Follow-up (any time):** Users / Roles / Organizations still build their own RESOURCE_NOT_FOUND; move them to `resourceNotFound(entity)`
 
@@ -95,7 +99,7 @@ Phase 8a — Leads CRUD + scoring — done, awaiting your review/commit (branch 
 
 ## Next step
 
-Phase 8b — lead status workflow (`PATCH /leads/:id/status`, transition map, compare-and-set, converted-lead guard; decisions already in ADR 0008) — only when you ask.
+Phase 9 — Lead conversion (one transaction: create/link Contact (+ Company), optional Deal, set status CONVERTED + convertedAt/ContactId/DealId via a new repository method; takes the lead lock FIRST, then the company lock; emits `lead.converted`; uses `leads:convert`) — only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -125,6 +129,7 @@ Phase 8b — lead status workflow (`PATCH /leads/:id/status`, transition map, co
 - Shared helpers added in 7a: `common/dto/owned-list-query.dto.ts`, `common/utils/{search,assert-has-changes,string-transform}.util.ts`, `common/policies/contact-details-policy.ts`, `test/factories/crm.factory.ts` (createCompany / createContact). `trimString` / `normalizeEmail` now live only in `string-transform.util`.
 - Contacts (7b): `modules/contacts` follows the Companies template; `CompaniesModule` now exports `CompaniesService` (`assertLinkable`). `ContactsRepository.inCompanyLock` is the only place that takes the company lock for linking; any new entity that links to a company must do the same (ADR 0007). Race e2e tests loop 20x and were verified to fail when the lock is removed.
 - Leads (8a): `modules/leads` (Companies/Contacts template) + `scoring/` (`LeadScoringStrategy` interface + `LEAD_SCORING_STRATEGY` token in `lead-scoring.strategy.ts`, weights in `lead-scoring.constants.ts`, `computeRuleBasedScore(input, weights)` pure fn so tests can try other weights). `LeadsRepository.updateVisible(scope,id,changes,rescore?)`: `rescore` present => lead lock + tx. Responses carry `status` (always NEW until 8b) and the read-only conversion fields. `LeadsModule` exports nothing. `test/factories/crm.factory.ts` has `createLead`. List filters: `status`, `source`, `ownerId`, `q`; sort includes `score`.
+- Leads (8b): `LeadsService.changeStatus` = `applyStatusTransition` (common). `LeadsRepository`: `notConverted` is in the where of `updateVisible` (also its in-tx scoring read) and `deleteVisible`; `transitionStatus(scope,id,from,to)` is the CAS. The service answers misses through `whyNotEditable` (visibility re-read). Phase 9 conversion must set `status=CONVERTED` with the lead lock held (the CAS `status = from` then rejects any status change racing with it) and must also be excluded from the `notConverted` guard by being its own method.
 - Python is not installed on this machine; use Edit/Write or shell tools for scripted edits. Bash heredocs containing `'` inside test code failed once: use the Write tool for big files.
 - `acquireOrgLock` no longer exists; use `acquireLock(tx, 'org', id)`. ADRs 0004 and 0005 still name the old function (historical).
 

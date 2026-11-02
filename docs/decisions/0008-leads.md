@@ -1,6 +1,6 @@
 # ADR 0008 — Leads (Phase 8)
 
-Status: accepted (8a CRUD + scoring implemented; 8b status workflow planned, decisions recorded here)
+Status: accepted (8a CRUD + scoring and 8b status workflow implemented)
 
 Leads follow the Companies/Contacts template (ADR 0007): visibility ANDed into the same `where` as
 the write, `resolveAssignableOwner` for owners, one `404` for hidden/missing/foreign/deleted. This
@@ -77,25 +77,61 @@ A lead has no foreign key to `Company`; the company is created or linked at conv
 company can therefore never break a lead (tested: a lead named after a soft-deleted company still
 reads).
 
-## 8b (planned): status workflow
+## 8b: status workflow
 
-Decided now so 8a does not paint 8b into a corner:
+`POST /leads/:id/status` with body `{ "status": "<target>" }` (permission `leads:update`). `POST`, not
+`PATCH`: it is an action with its own rules and its own errors, not a field edit.
 
-- **Transitions:** `NEW -> CONTACTED | UNQUALIFIED`, `CONTACTED -> QUALIFIED | UNQUALIFIED`,
-  `QUALIFIED -> UNQUALIFIED`, `UNQUALIFIED -> CONTACTED`. `CONVERTED` is reachable only through lead
-  conversion (Phase 9), never through the status endpoint.
+- **Transitions** (`lead-status-transitions.ts`): `NEW -> CONTACTED | UNQUALIFIED`,
+  `CONTACTED -> QUALIFIED | UNQUALIFIED`, `QUALIFIED -> UNQUALIFIED`, `UNQUALIFIED -> CONTACTED`.
+  `CONVERTED` is reachable only through lead conversion (Phase 9). It is not a valid target (the DTO
+  answers `400 VALIDATION_FAILED`: this is wrong for every lead, so it says nothing about this one)
+  and it leads nowhere.
 - **Reopen returns to `CONTACTED`, not `NEW`:** the lead has already been contacted; `NEW` would
   erase that history and put it back in the "untouched" queue. It also skips `QUALIFIED`, because a
   lead that was disqualified must be re-evaluated, not silently re-qualified.
+- **Same status is a conflict:** `NEW -> NEW` is not in the map, so it answers
+  `409 INVALID_STATUS_TRANSITION`. The change is deliberately **not idempotent**: retrying a change
+  that was already applied also answers 409, and the client should `GET` the lead to confirm its
+  status (also stated in Swagger). Idempotence would need request ids; nothing asks for it.
+- **The "from" is never client input.** The body has only `status`; any other field (`from`,
+  `score`, `ownerId`, `convertedAt`...) is a `400`. The service reads the lead (with the caller's
+  visibility) and the move is computed from the status it just read.
+- **Compare-and-set**, shared as `common/utils/status-transition.util.ts` (`TransitionMap` +
+  `applyStatusTransition`) because Deals and Tasks have the same shape: read with visibility, check
+  the map, then ONE conditional update whose `where` has `status = <what was read>` plus visibility.
+  No lock: the write is a single atomic statement. If it matches nothing the helper reads again,
+  with the same visibility: gone or hidden -> `404`; otherwise a `409` (see below) naming the
+  status it is now.
 - **Status is excluded from the score.** The score describes the lead's attributes, so
   `UNQUALIFIED` does not zero it (sorting by score still means "how promising is this contact data").
-  Consequence: a status change never changes the score, so it cannot make it stale. If status ever
-  enters the score (for example as a multiplier), the status change must recompute inside the same
-  transaction as the compare-and-set and under the lead lock, and `status` must join `SCORING_FIELDS`.
-- **Compare-and-set:** the transition is one conditional update (`where` has visibility and the
-  current status); a lost race answers `409 INVALID_STATUS_TRANSITION`.
-- **Converted leads are read-only** (`409 LEAD_ALREADY_CONVERTED` on edit/delete). Any lookup used to
-  tell `404` from `409` is visibility-scoped: an invisible lead is always `404`.
+  A status change therefore never changes the score, cannot make it stale, and takes no lock (tested
+  with the lead lock held by another transaction). A unit test asserts `status` is not in
+  `SCORING_FIELDS`. If status ever enters the score (for example as a multiplier), `status` must join
+  `SCORING_FIELDS` and the status change must recompute inside the same transaction as the
+  compare-and-set, under the lead lock.
+- **A converted lead is final.** `PATCH` (including an owner transfer) and `DELETE` carry
+  `status != CONVERTED` in the same `where` as the write; when they match nothing the service looks
+  again with visibility: a visible converted lead -> `409 LEAD_ALREADY_CONVERTED`, anything else ->
+  `404`. An invisible converted lead is always `404`, so its state is never revealed. `GET` and the
+  list still return it. An empty `PATCH` body is a `400` before any of this. Phase 9 decides any
+  exception to the owner-transfer block.
+
+### The two 409 codes (for frontend handling)
+
+| Code                        | Meaning                                                                                                                                  | What the UI does                                                               |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `LEAD_ALREADY_CONVERTED`    | The lead is final: it was converted (a status change, edit or delete was attempted)                                                      | Stop editing; show the lead read-only and link to the contact/deal it became   |
+| `INVALID_STATUS_TRANSITION` | That status change is not possible from the lead's current status (not in the map, same status, or the status changed under the request) | `GET` the lead, refresh the status, offer only the moves that are possible now |
+
+Both are `409` and both mean "your picture of the lead is out of date or not allowed"; the code tells
+the client whether to freeze the record or just refresh it.
+
+### Deferred: status history
+
+`LeadStatusHistory` (who changed the status, from what, when) is **not** built in 8b. It belongs to
+Phase 13 (Activities and Audit logs), which will record it from a `lead.status_changed` domain event;
+adding a table now would duplicate that. Until then `updatedAt` is the only trace.
 
 ## Prepared for Phase 9 (nothing built yet)
 

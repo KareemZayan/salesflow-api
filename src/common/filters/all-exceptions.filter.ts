@@ -10,6 +10,7 @@ import {
 import { Request, Response } from 'express';
 import { Prisma } from '../../generated/prisma/client';
 import { ERROR_CODES } from '../constants/error-codes';
+import { classifyDatabaseFailure, DatabaseFailure } from '../utils/database-failure.util';
 
 interface ErrorBody {
   statusCode: number;
@@ -29,6 +30,40 @@ const DEFAULT_CODE_BY_STATUS: Record<number, string> = {
   [HttpStatus.SERVICE_UNAVAILABLE]: ERROR_CODES.SERVICE_UNAVAILABLE,
 };
 
+// Seconds a client is told to wait where waiting is the right answer (no free connection, database
+// unreachable). Timeouts carry no hint: the same request may time out again. See ADR 0016.
+const DATABASE_RETRY_AFTER_SECONDS = 2;
+
+const DATABASE_FAILURE_RESPONSES: Record<
+  DatabaseFailure,
+  { status: HttpStatus; code: string; message: string; retryAfter: boolean }
+> = {
+  BUSY: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    code: ERROR_CODES.DATABASE_BUSY,
+    message: 'The service is busy, please retry shortly',
+    retryAfter: true,
+  },
+  TIMEOUT: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    code: ERROR_CODES.DATABASE_TIMEOUT,
+    message: 'The operation took too long and was cancelled; nothing was changed',
+    retryAfter: false,
+  },
+  WRITE_CONFLICT: {
+    status: HttpStatus.CONFLICT,
+    code: ERROR_CODES.WRITE_CONFLICT,
+    message: 'The operation conflicted with a concurrent change and was rolled back; please retry',
+    retryAfter: false,
+  },
+  UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    code: ERROR_CODES.DATABASE_UNAVAILABLE,
+    message: 'The service is temporarily unavailable',
+    retryAfter: true,
+  },
+};
+
 // The one place that decides what an error looks like on the wire. Stack traces and driver
 // messages are logged, never returned.
 @Catch()
@@ -40,7 +75,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const request = http.getRequest<Request & { id?: string }>();
     const response = http.getResponse<Response>();
 
-    const body = this.toBody(exception);
+    const failure = exception instanceof HttpException ? null : classifyDatabaseFailure(exception);
+    const body = failure ? this.fromDatabaseFailure(failure) : this.toBody(exception);
+    if (failure && DATABASE_FAILURE_RESPONSES[failure].retryAfter) {
+      response.setHeader('Retry-After', String(DATABASE_RETRY_AFTER_SECONDS));
+    }
     if (body.statusCode >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(exception instanceof Error ? exception.stack : String(exception));
     }
@@ -62,6 +101,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       ERROR_CODES.INTERNAL_ERROR,
       'Internal server error',
     );
+  }
+
+  private fromDatabaseFailure(failure: DatabaseFailure): ErrorBody {
+    const { status, code, message } = DATABASE_FAILURE_RESPONSES[failure];
+    return this.build(status, code, message);
   }
 
   private fromHttpException(exception: HttpException): ErrorBody {

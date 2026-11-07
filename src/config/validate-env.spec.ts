@@ -2,6 +2,7 @@ import { parseTrustProxy } from './app.config';
 import { validateEnv } from './validate-env';
 
 const BASE_ENV = {
+  NODE_ENV: 'development',
   DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
   JWT_ACCESS_SECRET: 'x'.repeat(32),
 };
@@ -104,13 +105,119 @@ describe('validateEnv: QUEUE_BOARD_ENABLED', () => {
 
   it('accepts false in production', () => {
     expect(() =>
-      validateEnv({ ...BASE_ENV, NODE_ENV: 'production', QUEUE_BOARD_ENABLED: 'false' }),
+      validateEnv({
+        ...BASE_ENV,
+        NODE_ENV: 'production',
+        REDIS_PASSWORD: 'a-real-secret',
+        QUEUE_BOARD_ENABLED: 'false',
+      }),
     ).not.toThrow();
   });
 
   it('rejects anything but true/false', () => {
     expect(() => validateEnv({ ...BASE_ENV, QUEUE_BOARD_ENABLED: 'yes' })).toThrow(
       /QUEUE_BOARD_ENABLED/,
+    );
+  });
+});
+
+describe('database pool and timeouts (ADR 0016)', () => {
+  it('has defaults whose ordering holds: statement < transaction < idle-in-transaction', () => {
+    const env = validateEnv(BASE_ENV);
+    expect(env).toMatchObject({
+      DB_POOL_MAX: 10,
+      DB_POOL_ACQUIRE_TIMEOUT_MS: 5000,
+      DB_TRANSACTION_TIMEOUT_MS: 10000,
+      DB_STATEMENT_TIMEOUT_MS: 8000,
+      DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: 30000,
+    });
+    expect(env.DB_STATEMENT_TIMEOUT_MS).toBeLessThan(env.DB_TRANSACTION_TIMEOUT_MS);
+    expect(env.DB_TRANSACTION_TIMEOUT_MS).toBeLessThan(env.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS);
+  });
+
+  it('rejects a statement timeout that is not below the transaction timeout', () => {
+    // Prisma cannot interrupt a statement blocked on a lock; only the server-side limit can.
+    expect(() =>
+      validateEnv({
+        ...BASE_ENV,
+        DB_STATEMENT_TIMEOUT_MS: '10000',
+        DB_TRANSACTION_TIMEOUT_MS: '10000',
+      }),
+    ).toThrow(/DB_STATEMENT_TIMEOUT_MS: must be smaller than DB_TRANSACTION_TIMEOUT_MS/);
+  });
+
+  it('rejects an idle-in-transaction limit that is not above the transaction timeout', () => {
+    expect(() => validateEnv({ ...BASE_ENV, DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: '10000' })).toThrow(
+      /DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: must be larger than DB_TRANSACTION_TIMEOUT_MS/,
+    );
+  });
+
+  it.each([
+    ['DB_POOL_MAX', '0'],
+    ['DB_POOL_MAX', '101'],
+    ['DB_POOL_ACQUIRE_TIMEOUT_MS', '0'],
+    ['DB_TRANSACTION_TIMEOUT_MS', '500'],
+    ['DB_STATEMENT_TIMEOUT_MS', 'abc'],
+  ])('rejects %s=%s', (key, value) => {
+    expect(() => validateEnv({ ...BASE_ENV, [key]: value })).toThrow(new RegExp(key));
+  });
+});
+
+describe('validateEnv: NODE_ENV (required, no default)', () => {
+  const withoutNodeEnv: Record<string, string> = { ...BASE_ENV };
+  delete withoutNodeEnv.NODE_ENV;
+
+  it('refuses to start when it is missing, instead of assuming development', () => {
+    expect(() => validateEnv(withoutNodeEnv)).toThrow(
+      /NODE_ENV: is required; set it to development, test or production/,
+    );
+  });
+
+  it.each(['', 'staging', 'Production', 'prod', ' production'])(
+    'rejects the unsupported value %j and does not say it is missing',
+    (value) => {
+      expect(() => validateEnv({ ...BASE_ENV, NODE_ENV: value })).toThrow(
+        /NODE_ENV: must be one of development, test, production/,
+      );
+    },
+  );
+
+  it.each(['development', 'test'])('accepts %s', (value) => {
+    expect(validateEnv({ ...BASE_ENV, NODE_ENV: value }).NODE_ENV).toBe(value);
+  });
+
+  it('accepts production with its required settings', () => {
+    expect(
+      validateEnv({ ...BASE_ENV, NODE_ENV: 'production', REDIS_PASSWORD: 'a-real-secret' })
+        .NODE_ENV,
+    ).toBe('production');
+  });
+});
+
+describe('validateEnv: production guards', () => {
+  const production = { ...BASE_ENV, NODE_ENV: 'production' };
+
+  it.each([
+    ['missing', {}],
+    ['empty', { REDIS_PASSWORD: '' }],
+    ['only whitespace', { REDIS_PASSWORD: '   ' }],
+  ])('requires a Redis password in production (%s)', (_label, extra) => {
+    expect(() => validateEnv({ ...production, ...extra })).toThrow(
+      /REDIS_PASSWORD: is required when NODE_ENV=production/,
+    );
+  });
+
+  it('accepts a non-empty Redis password in production', () => {
+    expect(() => validateEnv({ ...production, REDIS_PASSWORD: 'a-real-secret' })).not.toThrow();
+  });
+
+  it.each(['development', 'test'])('does not require a Redis password in %s', (nodeEnv) => {
+    expect(() => validateEnv({ ...BASE_ENV, NODE_ENV: nodeEnv })).not.toThrow();
+  });
+
+  it('reports every production problem at once, not one per restart', () => {
+    expect(() => validateEnv({ ...production, QUEUE_BOARD_ENABLED: 'true' })).toThrow(
+      /QUEUE_BOARD_ENABLED.*REDIS_PASSWORD|REDIS_PASSWORD.*QUEUE_BOARD_ENABLED/,
     );
   });
 });

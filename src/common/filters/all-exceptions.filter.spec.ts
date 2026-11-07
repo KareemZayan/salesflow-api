@@ -30,15 +30,16 @@ describe('AllExceptionsFilter', () => {
   function run(exception: unknown) {
     const json = vi.fn();
     const status = vi.fn().mockReturnValue({ json });
+    const setHeader = vi.fn();
     const host = {
       switchToHttp: () => ({
         getRequest: () => ({ originalUrl: '/api/v1/leads', id: 'req-1' }),
-        getResponse: () => ({ status }),
+        getResponse: () => ({ status, setHeader }),
       }),
     } as unknown as ArgumentsHost;
     vi.spyOn(filter['logger'], 'error').mockImplementation(() => undefined);
     filter.catch(exception, host);
-    return { status: status.mock.calls[0][0] as number, body: json.mock.calls[0][0] };
+    return { status: status.mock.calls[0][0] as number, body: json.mock.calls[0][0], setHeader };
   }
 
   it('returns the standard shape with path, timestamp and requestId', () => {
@@ -118,5 +119,69 @@ describe('AllExceptionsFilter', () => {
 
   it('treats an unmapped Prisma code as a 500', () => {
     expect(run(prismaError('P9999')).status).toBe(500);
+  });
+
+  describe('database failures (ADR 0016)', () => {
+    const withMeta = (code: string, meta: Record<string, unknown>, message = 'driver detail') =>
+      new Prisma.PrismaClientKnownRequestError(message, { code, clientVersion: 'test', meta });
+    const sqlState = (originalCode: string) => ({
+      driverAdapterError: { cause: { originalCode } },
+    });
+
+    it('answers a pool timeout 503 DATABASE_BUSY with Retry-After', () => {
+      const { status, body, setHeader } = run(new Error('timeout exceeded when trying to connect'));
+      expect(status).toBe(503);
+      expect(body).toMatchObject({ statusCode: 503, code: ERROR_CODES.DATABASE_BUSY });
+      expect(setHeader).toHaveBeenCalledWith('Retry-After', '2');
+    });
+
+    it('answers a lost database 503 DATABASE_UNAVAILABLE with Retry-After', () => {
+      const { status, body, setHeader } = run(withMeta('P1001', {}));
+      expect(status).toBe(503);
+      expect(body.code).toBe(ERROR_CODES.DATABASE_UNAVAILABLE);
+      expect(setHeader).toHaveBeenCalledWith('Retry-After', '2');
+    });
+
+    it.each([
+      ['an expired transaction', withMeta('P2028', { operation: 'query', timeout: 200 })],
+      ['a statement timeout', withMeta('P2039', sqlState('57014'))],
+      ['a lock timeout', withMeta('P2010', sqlState('55P03'))],
+    ])('answers %s 503 DATABASE_TIMEOUT without a retry hint', (_label, error) => {
+      const { status, body, setHeader } = run(error);
+      expect(status).toBe(503);
+      expect(body.code).toBe(ERROR_CODES.DATABASE_TIMEOUT);
+      expect(setHeader).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a model-query deadlock', withMeta('P2034', sqlState('40P01'))],
+      ['a raw-query deadlock', withMeta('P2010', sqlState('40P01'))],
+      ['a serialization failure', withMeta('P2034', sqlState('40001'))],
+    ])('answers %s 409 WRITE_CONFLICT', (_label, error) => {
+      const { status, body, setHeader } = run(error);
+      expect(status).toBe(409);
+      expect(body.code).toBe(ERROR_CODES.WRITE_CONFLICT);
+      expect(setHeader).not.toHaveBeenCalled();
+    });
+
+    it('keeps a leaked, already-closed transaction client a 500: it is a bug, not load', () => {
+      const closed = withMeta('P2028', {}, 'Transaction API error: Transaction already closed');
+      const { status, body } = run(closed);
+      expect(status).toBe(500);
+      expect(body.code).toBe(ERROR_CODES.INTERNAL_ERROR);
+    });
+
+    it('never leaks driver detail and still logs the cause', () => {
+      const error = withMeta('P2039', sqlState('57014'), 'relation "secret_table" is slow');
+      const { body } = run(error);
+      expect(JSON.stringify(body)).not.toContain('secret_table');
+      expect(filter['logger'].error).toHaveBeenCalled();
+    });
+
+    it('does not let a database look-alike override an HttpException', () => {
+      const { status, body } = run(new ConflictException('Lead already exists'));
+      expect(status).toBe(409);
+      expect(body.code).toBe(ERROR_CODES.CONFLICT);
+    });
   });
 });

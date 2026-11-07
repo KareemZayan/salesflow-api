@@ -19,6 +19,9 @@ pnpm start:dev
 
 The API is served under `/api/v1`.
 
+`NODE_ENV` has **no default** and must be `development`, `test` or `production`; the app (and the seed) stop at
+startup if it is missing or anything else. `.env.example` already sets it for local work.
+
 ## Scripts
 
 | Script           | Description              |
@@ -50,6 +53,11 @@ The rate limiter keys on the client IP. Behind nginx, a cloud load balancer or s
 | Several hops, or a known proxy network                                  | hop count, or a subnet list such as `loopback, 10.0.0.0/8` |
 
 Never set `true` while the API is directly reachable: any client could then spoof `X-Forwarded-For` to dodge the limit.
+
+With `NODE_ENV=production`, the API logs a warning at startup when `TRUST_PROXY` is `false` (easy to forget
+behind a proxy) or `CORS_ORIGINS` is empty (browsers on other origins are blocked). Both are valid
+settings, so they warn instead of stopping the app. Responses under `/api/v1` carry `Cache-Control: no-store`
+(they hold tokens and tenant data); `/health` and the development-only Swagger and Bull Board UIs do not.
 
 ## Audit logs
 
@@ -100,8 +108,10 @@ Run at least one instance with workers enabled, or nothing is processed and noth
 
 ### Redis in production
 
-- Set `REDIS_PASSWORD`. The bundled `docker-compose.yml` starts Redis with authentication when it is set
-  (and its healthcheck authenticates), and the API reads the same variable.
+- `REDIS_PASSWORD` is **required** when `NODE_ENV=production`: the application refuses to start with an
+  empty or whitespace-only value. That includes the prod-like `docker compose -f docker-compose.yml up`,
+  which needs it in `.env` too. The bundled `docker-compose.yml` starts Redis with authentication when it
+  is set (and its healthcheck authenticates), and the API reads the same variable.
 - The base compose file publishes **no** Redis port: Redis is reachable on the compose network only. The
   dev override (`docker-compose.override.yml`) publishes it on `127.0.0.1`, never on all interfaces.
   Keep it that way on any host that is reachable from outside.

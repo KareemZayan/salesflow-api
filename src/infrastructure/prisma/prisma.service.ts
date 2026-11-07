@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { APP_CONFIG_KEY, AppConfig } from '../../config/app.config';
 import { PrismaClient } from '../../generated/prisma/client';
+import { buildPoolConfig, buildTransactionOptions } from './database-options';
 
 // Prisma 7 talks to Postgres through a driver adapter. The connection is opened lazily on the
 // first query, so an unreachable database does not stop the app from booting: /health/ready
@@ -10,8 +11,11 @@ import { PrismaClient } from '../../generated/prisma/client';
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleDestroy {
   constructor(config: ConfigService) {
-    const { databaseUrl } = config.getOrThrow<AppConfig>(APP_CONFIG_KEY);
-    super({ adapter: new PrismaPg({ connectionString: databaseUrl }) });
+    const { databaseUrl, database } = config.getOrThrow<AppConfig>(APP_CONFIG_KEY);
+    super({
+      adapter: new PrismaPg(buildPoolConfig(databaseUrl, database)),
+      transactionOptions: buildTransactionOptions(database),
+    });
   }
 
   async onModuleDestroy(): Promise<void> {

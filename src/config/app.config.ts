@@ -14,10 +14,19 @@ export interface AppConfig {
   trustProxy: TrustProxy;
   logLevel: Env['LOG_LEVEL'];
   databaseUrl: string;
+  database: DatabaseConfig;
   redis: RedisConfig;
   queue: QueueConfig;
   auth: AuthConfig;
   throttle: ThrottleConfig;
+}
+
+export interface DatabaseConfig {
+  poolMax: number;
+  acquireTimeoutMs: number;
+  transactionTimeoutMs: number;
+  statementTimeoutMs: number;
+  idleInTransactionTimeoutMs: number;
 }
 
 export interface RedisConfig {
@@ -62,6 +71,13 @@ export const appConfig = registerAs(APP_CONFIG_KEY, (): AppConfig => ({
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY as string),
   logLevel: process.env.LOG_LEVEL as Env['LOG_LEVEL'],
   databaseUrl: process.env.DATABASE_URL as string,
+  database: {
+    poolMax: Number(process.env.DB_POOL_MAX),
+    acquireTimeoutMs: Number(process.env.DB_POOL_ACQUIRE_TIMEOUT_MS),
+    transactionTimeoutMs: Number(process.env.DB_TRANSACTION_TIMEOUT_MS),
+    statementTimeoutMs: Number(process.env.DB_STATEMENT_TIMEOUT_MS),
+    idleInTransactionTimeoutMs: Number(process.env.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS),
+  },
   redis: {
     host: process.env.REDIS_HOST as string,
     port: Number(process.env.REDIS_PORT),

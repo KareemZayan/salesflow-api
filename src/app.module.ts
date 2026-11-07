@@ -19,6 +19,7 @@ import { LeadsModule } from './modules/leads/leads.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { PipelinesModule } from './modules/pipelines/pipelines.module';
+import { ReportsModule } from './modules/reports/reports.module';
 import { RolesModule } from './modules/roles/roles.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { UsersModule } from './modules/users/users.module';
@@ -49,6 +50,7 @@ import { UsersModule } from './modules/users/users.module';
     ActivitiesModule,
     NotificationsModule,
     AuditLogsModule,
+    ReportsModule,
     JobsModule,
     // After ConfigModule.forRoot: whether it mounts is decided from the loaded environment.
     QueueBoardModule.register(),

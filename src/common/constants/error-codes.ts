@@ -80,6 +80,8 @@ export const ERROR_CODES = {
   INVALID_STATUS_TRANSITION: 'INVALID_STATUS_TRANSITION',
   // A cursor that is malformed, was tampered with or was issued for another organization.
   INVALID_CURSOR: 'INVALID_CURSOR',
+  // A report window that is empty, too long or would need too many buckets (ADR 0015).
+  INVALID_REPORT_RANGE: 'INVALID_REPORT_RANGE',
   // System timeline entries are written by the server only: nobody can delete them (409, shown only
   // to someone who can already see the entry). Manual entries: author or admin (403 otherwise).
   ACTIVITY_IMMUTABLE: 'ACTIVITY_IMMUTABLE',

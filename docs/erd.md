@@ -408,6 +408,7 @@ Rule: tenant-scoped query patterns **lead with `organizationId`**. Soft-deleted 
 | `Lead`             | `(organizationId, ownerId, status, createdAt)`                                                   | Main list: my leads filtered by status                            |
 | `Lead`             | `(organizationId, source)`                                                                       | Report: leads by source                                           |
 | `Lead`             | `(organizationId, status, convertedAt)`                                                          | Report: conversion rate over time                                 |
+| `Lead`             | `(organizationId, createdAt)`                                                                    | Lead reports for the admin scope (ADR 0015, Phase 14)             |
 | `PipelineStage`    | `(pipelineId, position)`                                                                         | Ordered stages of a pipeline                                      |
 | `Deal`             | `(organizationId, ownerId, status, expectedCloseDate)`                                           | My open deals, forecast by close date                             |
 | `Deal`             | `(organizationId, pipelineId, stageId, status)`                                                  | Kanban board and pipeline summary                                 |

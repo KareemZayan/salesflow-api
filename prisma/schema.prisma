@@ -322,6 +322,9 @@ model Lead {
   @@index([organizationId, ownerId, status, createdAt])
   @@index([organizationId, source])
   @@index([organizationId, status, convertedAt])
+  // Lead reports (cohort by createdAt) for the admin scope, which cannot use the owner-led index
+  // above; without it the query scans every tenant's leads (EXPLAIN evidence in ADR 0015).
+  @@index([organizationId, createdAt])
 }
 
 // ---------------------------------------------------------------------------

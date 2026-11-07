@@ -10,6 +10,7 @@ const repository = {
   markRead: vi.fn(),
   markAllRead: vi.fn(),
   createIfAbsent: vi.fn(),
+  deleteExpiredBatch: vi.fn(),
 };
 const service = new NotificationsService(repository as unknown as NotificationsRepository);
 const actor = { userId: 'me', organizationId: 'org' } as AuthenticatedUser;
@@ -77,5 +78,34 @@ describe('NotificationsService', () => {
     const job = { dedupeKey: 'k' } as never;
     await expect(service.createFromJob(job)).resolves.toBe('duplicate');
     expect(repository.createIfAbsent).toHaveBeenCalledWith(job);
+  });
+});
+
+describe('NotificationsService.purgeExpired', () => {
+  const NOW = new Date('2026-11-07T00:00:00.000Z');
+  const days = (n: number) => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000);
+  beforeEach(() => vi.clearAllMocks());
+
+  it('uses 90 days for read and 180 days for unread notifications', async () => {
+    repository.deleteExpiredBatch.mockResolvedValue({ removed: 0, exhausted: true });
+    await service.purgeExpired(NOW);
+    expect(repository.deleteExpiredBatch).toHaveBeenCalledWith(
+      { read: days(90), unread: days(180) },
+      expect.any(Number),
+    );
+  });
+
+  it('keeps going while batches are full and returns only the total count', async () => {
+    repository.deleteExpiredBatch
+      .mockResolvedValueOnce({ removed: 1000, exhausted: false })
+      .mockResolvedValueOnce({ removed: 40, exhausted: true });
+    await expect(service.purgeExpired(NOW)).resolves.toBe(1040);
+    expect(repository.deleteExpiredBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops at the batch cap and leaves the rest for the next run', async () => {
+    repository.deleteExpiredBatch.mockResolvedValue({ removed: 1000, exhausted: false });
+    await service.purgeExpired(NOW);
+    expect(repository.deleteExpiredBatch).toHaveBeenCalledTimes(50);
   });
 });

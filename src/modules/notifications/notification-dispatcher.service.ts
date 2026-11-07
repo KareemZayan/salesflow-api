@@ -16,9 +16,7 @@ export class NotificationDispatcher {
   async dispatch(job: CreateNotificationJob | null): Promise<void> {
     if (!job) return;
     try {
-      await this.queue.enqueue(QUEUE_NAMES.NOTIFICATIONS, CREATE_NOTIFICATION_JOB, job, {
-        jobId: job.dedupeKey,
-      });
+      await this.dispatchStrict(job);
     } catch (error) {
       // Ids only (the key names the event and the record), never the title or the payload.
       this.logger.error(
@@ -27,5 +25,14 @@ export class NotificationDispatcher {
         }`,
       );
     }
+  }
+
+  // For the scheduled jobs: nothing has committed yet that a failure could contradict, so a Redis
+  // outage must reach the caller. The job then fails and is retried, and its marker is not set, so
+  // the notification is delayed rather than lost.
+  dispatchStrict(job: CreateNotificationJob): Promise<void> {
+    return this.queue.enqueue(QUEUE_NAMES.NOTIFICATIONS, CREATE_NOTIFICATION_JOB, job, {
+      jobId: job.dedupeKey,
+    });
   }
 }

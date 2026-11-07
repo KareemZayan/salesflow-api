@@ -2,7 +2,13 @@ import { DealStatus, NotificationType } from '../../generated/prisma/client';
 import { DealStageChangedEvent } from '../deals/events/deal-stage-changed.event';
 import { LeadConvertedEvent } from '../leads/events/lead-converted.event';
 import { TaskAssignedEvent } from '../tasks/events/task-assigned.event';
-import { dealStageChangedJob, leadConvertedJob, taskAssignedJob } from './notification-job.factory';
+import {
+  dealStageChangedJob,
+  leadConvertedJob,
+  taskAssignedJob,
+  taskDueSoonJob,
+  taskOverdueJob,
+} from './notification-job.factory';
 
 const AT = new Date('2026-11-02T10:00:00.000Z');
 const ORG = 'org-1';
@@ -91,5 +97,44 @@ describe('notification job factory', () => {
     for (const job of [taskAssignedJob(taskEvent()), leadConvertedJob(leadEvent())]) {
       expect(job?.dedupeKey).not.toContain(':');
     }
+  });
+});
+
+describe('scheduled task alerts', () => {
+  const subject = { organizationId: ORG, taskId: 'task-1', assigneeId: 'rep' };
+
+  it('builds a TASK_DUE_SOON job for the assignee, keyed on the reminder instant', () => {
+    expect(taskDueSoonJob({ ...subject, reminderAt: AT })).toEqual({
+      organizationId: ORG,
+      userId: 'rep',
+      type: NotificationType.TASK_DUE_SOON,
+      title: 'A task is coming up',
+      body: null,
+      data: { taskId: 'task-1' },
+      dedupeKey: `task.reminder-task-1-${AT.getTime()}`,
+    });
+  });
+
+  it('builds a TASK_OVERDUE job for the assignee, keyed on the due instant', () => {
+    expect(taskOverdueJob({ ...subject, dueDate: AT })).toMatchObject({
+      type: NotificationType.TASK_OVERDUE,
+      userId: 'rep',
+      dedupeKey: `task.overdue-task-1-${AT.getTime()}`,
+    });
+  });
+
+  it('a moved reminder or due date is a new fact: a different key', () => {
+    const later = new Date(AT.getTime() + 60_000);
+    expect(taskDueSoonJob({ ...subject, reminderAt: later }).dedupeKey).not.toBe(
+      taskDueSoonJob({ ...subject, reminderAt: AT }).dedupeKey,
+    );
+    expect(taskOverdueJob({ ...subject, dueDate: later }).dedupeKey).not.toBe(
+      taskOverdueJob({ ...subject, dueDate: AT }).dedupeKey,
+    );
+  });
+
+  it('keys contain no colon (BullMQ rejects it in a job id)', () => {
+    expect(taskDueSoonJob({ ...subject, reminderAt: AT }).dedupeKey).not.toContain(':');
+    expect(taskOverdueJob({ ...subject, dueDate: AT }).dedupeKey).not.toContain(':');
   });
 });

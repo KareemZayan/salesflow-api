@@ -120,5 +120,5 @@ its own decision**. Until then, anything that must not be lost cannot depend on 
 ## Known limits
 
 - No outbox (above). No dead-letter queue. Notification text is not localized (English only, per project rule).
-- Notification retention is unbounded: no cleanup job yet (candidate for 12b together with the refresh-token cleanup).
+- Notification retention and the refresh-token clean-up arrived in 12b; scheduling uses BullMQ job schedulers, not `@nestjs/schedule` (see [ADR 0012](0012-scheduled-jobs.md)).
 - Redis shares one `QUEUE_PREFIX` per environment; two environments on one Redis must use different prefixes.

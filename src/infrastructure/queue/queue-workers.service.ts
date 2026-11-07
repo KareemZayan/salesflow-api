@@ -15,7 +15,7 @@ import { QueueJobHandler, TenantJobPayload } from './queue.types';
 @Injectable()
 export class QueueWorkersService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(QueueWorkersService.name);
-  private readonly handlers: QueueJobHandler[] = [];
+  private readonly handlers: QueueJobHandler<object>[] = [];
   private readonly workers: Worker[] = [];
 
   constructor(
@@ -23,7 +23,7 @@ export class QueueWorkersService implements OnApplicationBootstrap, OnModuleDest
     private readonly tenant: TenantContextService,
   ) {}
 
-  register(handler: QueueJobHandler): void {
+  register<P extends object>(handler: QueueJobHandler<P>): void {
     this.handlers.push(handler);
   }
 
@@ -57,9 +57,12 @@ export class QueueWorkersService implements OnApplicationBootstrap, OnModuleDest
   }
 
   // A worker has no request, so the tenant context comes from the payload. A job without a tenant
-  // can never succeed, so it is not retried.
-  private run(handler: QueueJobHandler, job: Job<TenantJobPayload>): Promise<unknown> {
-    const organizationId: unknown = job.data?.organizationId;
+  // can never succeed, so it is not retried. Only a handler that declares itself cross-tenant
+  // (`tenantScoped: false`, the sweeps) runs without one.
+  private run(handler: QueueJobHandler<object>, job: Job<object>): Promise<unknown> {
+    if (handler.tenantScoped === false) return handler.handle(job);
+    const organizationId: unknown = (job.data as Partial<TenantJobPayload> | undefined)
+      ?.organizationId;
     if (typeof organizationId !== 'string' || organizationId === '') {
       throw new UnrecoverableError('Job payload has no organizationId');
     }

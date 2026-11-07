@@ -437,26 +437,29 @@ model DealStageHistory {
 // ---------------------------------------------------------------------------
 
 model Task {
-  id             String       @id @default(uuid())
-  organizationId String
-  assigneeId     String
-  createdById    String
-  title          String
-  description    String?
-  dueDate        DateTime?
-  priority       TaskPriority @default(MEDIUM)
+  id                String       @id @default(uuid())
+  organizationId    String
+  assigneeId        String
+  createdById       String
+  title             String
+  description       String?
+  dueDate           DateTime?
+  priority          TaskPriority @default(MEDIUM)
   // Overdue is computed from dueDate, not stored.
-  status         TaskStatus   @default(OPEN)
-  completedAt    DateTime?
-  reminderAt     DateTime?
+  status            TaskStatus   @default(OPEN)
+  completedAt       DateTime?
+  reminderAt        DateTime?
   // Idempotency marker for the reminder job.
-  reminderSentAt DateTime?
-  leadId         String?
-  dealId         String?
-  contactId      String?
-  companyId      String?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  reminderSentAt    DateTime?
+  // Idempotency marker for the overdue notification: set once per dueDate and cleared only when the
+  // dueDate changes, so a reopened task is not notified again for the same dueDate.
+  overdueNotifiedAt DateTime?
+  leadId            String?
+  dealId            String?
+  contactId         String?
+  companyId         String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   assignee     User         @relation("TaskAssignee", fields: [assigneeId, organizationId], references: [id, organizationId], onDelete: Restrict)
@@ -465,8 +468,8 @@ model Task {
   deal         Deal?        @relation(fields: [dealId, organizationId], references: [id, organizationId], onDelete: Restrict)
   contact      Contact?     @relation(fields: [contactId, organizationId], references: [id, organizationId], onDelete: Restrict)
   company      Company?     @relation(fields: [companyId, organizationId], references: [id, organizationId], onDelete: Restrict)
-  // Raw SQL in the init migration adds a partial index on (status, dueDate) for open tasks
-  // (cross-org overdue-checker job).
+  // Raw SQL adds partial indexes for the scheduled jobs: open tasks by (status, dueDate) in the init
+  // migration, pending reminders and pending overdue notifications in add_task_overdue_notified_at.
 
   @@unique([id, organizationId])
   // "My open tasks by due date" and per-org overdue detection.
@@ -530,6 +533,8 @@ model Notification {
   @@unique([organizationId, dedupeKey])
   // Unread inbox and unread count.
   @@index([userId, readAt, createdAt(sort: Desc)])
+  // Daily retention job: oldest rows of one organization.
+  @@index([organizationId, createdAt])
 }
 
 // The only polymorphic table: `entityId` has no FK so the log outlives the entity it describes.

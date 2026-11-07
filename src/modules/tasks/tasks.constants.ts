@@ -7,6 +7,10 @@ export const TASK_SEARCH_FIELDS = ['title'] as const;
 export const TASK_TITLE_MAX_LENGTH = 200;
 export const TASK_DESCRIPTION_MAX_LENGTH = 5000;
 
+// Most tasks ONE per-organization alert job handles. A big organization's backlog is worked off over
+// several sweeps instead of one job holding a worker: 1,200 due tasks take three sweeps.
+export const TASK_ALERT_BATCH_LIMIT = 500;
+
 // Statuses of a task that still needs doing. Everything else (COMPLETED, CANCELLED) is closed:
 // read-only, never overdue, and it does not pin the contact or company it points at.
 export const OPEN_TASK_STATUSES: readonly TaskStatus[] = [TaskStatus.OPEN, TaskStatus.IN_PROGRESS];

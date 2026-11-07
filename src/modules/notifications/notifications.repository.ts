@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { TenantPrismaClient } from '../../common/tenant/tenant-scope.extension';
+import { BatchResult } from '../../common/utils/batch.util';
 import { queryPage } from '../../common/utils/pagination.util';
 import { isForeignKeyViolation } from '../../common/utils/prisma-error.util';
 import { Prisma } from '../../generated/prisma/client';
@@ -69,6 +70,29 @@ export class NotificationsRepository {
       data: { readAt: now },
     });
     return count;
+  }
+
+  // PERMANENT delete of up to `limit` rows older than the cutoffs: read ones (`readAt` set) by the
+  // first, unread ones by the second. Ids are picked first because `deleteMany` has no LIMIT.
+  async deleteExpiredBatch(
+    cutoffs: { read: Date; unread: Date },
+    limit: number,
+  ): Promise<BatchResult> {
+    const expired = await this.prisma.notification.findMany({
+      where: {
+        OR: [
+          { readAt: { not: null }, createdAt: { lt: cutoffs.read } },
+          { readAt: null, createdAt: { lt: cutoffs.unread } },
+        ],
+      },
+      select: { id: true },
+      take: limit,
+    });
+    if (expired.length === 0) return { removed: 0, exhausted: true };
+    const { count } = await this.prisma.notification.deleteMany({
+      where: { id: { in: expired.map(({ id }) => id) } },
+    });
+    return { removed: count, exhausted: expired.length < limit };
   }
 
   // ON CONFLICT DO NOTHING on (organizationId, dedupeKey): two workers racing on the same job both

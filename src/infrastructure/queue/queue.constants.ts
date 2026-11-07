@@ -41,3 +41,6 @@ export const SWEEP_JOB_OPTIONS: JobsOptions = {
   removeOnComplete: { age: 60 * 60, count: 20 },
   removeOnFail: { age: 24 * 60 * 60, count: 100 },
 };
+
+// Where Bull Board is served, relative to the global API prefix (`/api/v1/queues`). Development only.
+export const QUEUE_BOARD_ROUTE = '/queues';

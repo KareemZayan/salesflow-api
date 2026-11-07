@@ -8,6 +8,7 @@ import { HealthModule } from './infrastructure/health/health.module';
 import { JobsModule } from './jobs/jobs.module';
 import { LoggerModule } from './infrastructure/logger/logger.module';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
+import { QueueBoardModule } from './infrastructure/queue/queue-board.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { CompaniesModule } from './modules/companies/companies.module';
 import { ContactsModule } from './modules/contacts/contacts.module';
@@ -45,6 +46,8 @@ import { UsersModule } from './modules/users/users.module';
     TasksModule,
     NotificationsModule,
     JobsModule,
+    // After ConfigModule.forRoot: whether it mounts is decided from the loaded environment.
+    QueueBoardModule.register(),
   ],
 })
 export class AppModule {}

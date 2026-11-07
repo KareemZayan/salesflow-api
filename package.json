@@ -30,6 +30,9 @@
   },
   "type": "commonjs",
   "dependencies": {
+    "@bull-board/api": "^9.11.0",
+    "@bull-board/express": "^9.11.0",
+    "@bull-board/nestjs": "^9.11.0",
     "@nestjs/bullmq": "^11.0.5",
     "@nestjs/common": "^11.2.8",
     "@nestjs/config": "^4.0.4",

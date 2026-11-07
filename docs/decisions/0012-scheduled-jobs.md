@@ -105,6 +105,4 @@ a second "overdue" for the same deadline is noise.
   after the commit (ADR 0011). The sweeps do **not** repair it; they only cover the time-based alerts,
   whose source of truth is the task row itself and which therefore self-heal. The **outbox stays a
   separate architectural decision** (touches Leads, Deals and Tasks).
-- **TODO:** `LEAD_ASSIGNED` is not produced. It needs a `lead.assigned` domain event in Leads; out of 12b
-  by decision.
-- Bull Board / queue monitoring and the README description of failed-job handling are 12c.
+- `LEAD_ASSIGNED` and Bull Board / failed-job handling / the README section arrived in 12c (see ADR 0011).

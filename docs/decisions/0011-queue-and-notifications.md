@@ -53,7 +53,7 @@ and this app needs the worker switch (below) to come from validated config.
 
 A job that exhausts its attempts stays in the queue's **failed** set for 7 days (or 5000 jobs). To look
 at one: its id is the notification's `dedupeKey` (`<event>-<recordId>-<epoch ms>`); `failedReason`
-holds the cause. Bull Board (12c) will list them. To re-run one after fixing the cause, retry it from
+holds the cause. In local development Bull Board lists them (below). To re-run one after fixing the cause, retry it from
 there; the insert is idempotent, so a retry can never double-notify. There is no automatic dead-letter
 queue yet.
 
@@ -116,6 +116,40 @@ its own decision**. Until then, anything that must not be lost cannot depend on 
   points Redis at a dead port with workers off, and one suite proves the API keeps working then.
 - Local gotcha: port 6379 on this machine belongs to another project's Redis. This project's Redis is
   published on `REDIS_HOST_PORT` (6380 in the local `.env`) by the dev override.
+
+## Queue operations (Phase 12c)
+
+- **Bull Board** (`@bull-board/nestjs`, `api`, `express`), served at `<api prefix>/queues`. It is
+  **development only and closed by default**: `QUEUE_BOARD_ENABLED` defaults to `false`, and it mounts only
+  when the flag is `true` AND `NODE_ENV` is not `production`. The env schema refuses to start with
+  `NODE_ENV=production` and the flag `true` (fail fast, never silently ignored). The default compose file
+  does not enable it. Reason it is not "admin only in production": it is Express middleware, outside the Nest
+  guards, and a browser page cannot send our `Authorization: Bearer` header, so that would need a second login
+  mechanism. It also shows every organization's payloads. Production variant (separate platform-level
+  credential, not an organization admin) is a Phase 15 TODO.
+- The packages are **regular dependencies**, not dev dependencies: `QueueBoardModule` is imported statically by
+  `AppModule`, and the production image installs with `--prod`, so it must be able to load the module even
+  though it never mounts. Hiding the import behind a lazy `require` would only move a missing-package failure
+  to runtime.
+- Its queues come from `QUEUE_NAME_LIST` (the list `QueueModule` registers), so no queue name is repeated.
+- CSP: helmet's policy is relaxed for the board path only (and for Swagger as before); a test compares the
+  headers of other paths with and without the board.
+- Job payloads hold ids and the tenant only, never an email, a name or free text (unit test over every factory),
+  because they are visible in Redis and in this UI.
+- **Graceful shutdown:** `QueueWorkersService.onModuleDestroy` (12a) finishes the running job and forces the
+  close after `WORKER_CLOSE_TIMEOUT_MS`, but it only ran on `app.close()`: `main.ts` never enabled shutdown
+  hooks, so a real `SIGTERM` skipped it. 12c adds `app.enableShutdownHooks()` in `main.ts` (not in
+  `configureApp`, so the e2e apps do not each register signal handlers). Not covered by an automated test
+  (it would need a child process and a signal).
+- **Redis in production:** `REDIS_PASSWORD` is read by the app (12a). 12c makes the bundled compose Redis honour
+  it (`--requirepass` when set, authenticated healthcheck; empty keeps the local passwordless setup). The base
+  compose file publishes no Redis port; the dev override binds `127.0.0.1` only. Enforcing a password and TLS in
+  production is a Phase 15 TODO.
+- **Readiness:** `/health/ready` checks Redis with a real round-trip through the BullMQ connection (12a,
+  `RedisHealthIndicator`), next to the database.
+- `LEAD_ASSIGNED`: `lead.assigned` is published by `LeadsService` after the commit, only for a REAL owner change
+  (or a create for someone other than the actor), to the NEW owner, never to the actor, never by lead
+  conversion. Same best-effort delivery as the other events.
 
 ## Known limits
 

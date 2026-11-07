@@ -1,9 +1,11 @@
 import { DealStatus, NotificationType } from '../../generated/prisma/client';
 import { DealStageChangedEvent } from '../deals/events/deal-stage-changed.event';
+import { LeadAssignedEvent } from '../leads/events/lead-assigned.event';
 import { LeadConvertedEvent } from '../leads/events/lead-converted.event';
 import { TaskAssignedEvent } from '../tasks/events/task-assigned.event';
 import {
   dealStageChangedJob,
+  leadAssignedJob,
   leadConvertedJob,
   taskAssignedJob,
   taskDueSoonJob,
@@ -137,4 +139,129 @@ describe('scheduled task alerts', () => {
     expect(taskDueSoonJob({ ...subject, reminderAt: AT }).dedupeKey).not.toContain(':');
     expect(taskOverdueJob({ ...subject, dueDate: AT }).dedupeKey).not.toContain(':');
   });
+});
+
+describe('lead assigned', () => {
+  const event = (overrides: Partial<LeadAssignedEvent> = {}): LeadAssignedEvent => ({
+    organizationId: ORG,
+    leadId: 'lead-1',
+    ownerId: 'rep',
+    previousOwnerId: 'other',
+    actorId: 'admin',
+    assignedAt: AT,
+    ...overrides,
+  });
+
+  it('notifies the NEW owner with the lead id and a deterministic key', () => {
+    expect(leadAssignedJob(event())).toEqual({
+      organizationId: ORG,
+      userId: 'rep',
+      type: NotificationType.LEAD_ASSIGNED,
+      title: 'A lead was assigned to you',
+      body: null,
+      data: { leadId: 'lead-1' },
+      dedupeKey: `lead.assigned-lead-1-${AT.getTime()}`,
+    });
+  });
+
+  it('never notifies the actor about their own action', () => {
+    expect(leadAssignedJob(event({ ownerId: 'admin', actorId: 'admin' }))).toBeNull();
+  });
+});
+
+// Job payloads travel through Redis and are visible in Bull Board and in failed jobs, so they carry
+// ids and the tenant only: never an email, a name or any free text. Every factory is run over the
+// same fixtures, whose ids are UUIDs; the static titles are the only prose a job may hold.
+describe('notification job payloads hold no personal data', () => {
+  const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const ids = { org: uuid(1), actor: uuid(2), owner: uuid(3), subject: uuid(4), other: uuid(5) };
+  const STATIC_TITLES = new Set([
+    'A task was assigned to you',
+    'A lead was assigned to you',
+    'One of your leads was converted',
+    'One of your deals was won',
+    'One of your deals was lost',
+    'One of your deals changed stage',
+    'A task is coming up',
+    'A task is overdue',
+  ]);
+  const jobs = [
+    taskAssignedJob({
+      organizationId: ids.org,
+      taskId: ids.subject,
+      assigneeId: ids.owner,
+      previousAssigneeId: null,
+      actorId: ids.actor,
+      assignedAt: AT,
+    }),
+    leadAssignedJob({
+      organizationId: ids.org,
+      leadId: ids.subject,
+      ownerId: ids.owner,
+      previousOwnerId: null,
+      actorId: ids.actor,
+      assignedAt: AT,
+    }),
+    leadConvertedJob({
+      organizationId: ids.org,
+      leadId: ids.subject,
+      contactId: ids.other,
+      companyId: null,
+      dealId: null,
+      ownerId: ids.owner,
+      actorId: ids.actor,
+      convertedAt: AT,
+    }),
+    ...[DealStatus.OPEN, DealStatus.WON, DealStatus.LOST].map((status) =>
+      dealStageChangedJob(
+        {
+          organizationId: ids.org,
+          dealId: ids.subject,
+          pipelineId: ids.other,
+          fromStageId: ids.other,
+          toStageId: ids.other,
+          status,
+          actorId: ids.actor,
+          changedAt: AT,
+        },
+        ids.owner,
+      ),
+    ),
+    taskDueSoonJob({
+      organizationId: ids.org,
+      taskId: ids.subject,
+      assigneeId: ids.owner,
+      reminderAt: AT,
+    }),
+    taskOverdueJob({
+      organizationId: ids.org,
+      taskId: ids.subject,
+      assigneeId: ids.owner,
+      dueDate: AT,
+    }),
+  ];
+
+  it('covers every notification type the factories can produce', () => {
+    expect(new Set(jobs.map((job) => job?.type)).size).toBe(8);
+  });
+
+  it.each(jobs.map((job, index) => [job?.type ?? `job ${index}`, job] as const))(
+    '%s: ids and the tenant only, a static title and no body',
+    (_name, job) => {
+      expect(job).not.toBeNull();
+      if (!job) return;
+      expect(Object.keys(job).sort()).toEqual(
+        ['body', 'data', 'dedupeKey', 'organizationId', 'title', 'type', 'userId'].sort(),
+      );
+      expect(job.body).toBeNull();
+      expect(STATIC_TITLES.has(job.title)).toBe(true);
+      // `data` is a flat map whose every value is an id (a UUID here).
+      for (const value of Object.values(job.data)) {
+        expect(value).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        );
+      }
+      expect(JSON.stringify(job)).not.toContain('@');
+    },
+  );
 });

@@ -118,6 +118,23 @@ export class DealsRepository {
     return deal?.ownerId ?? null;
   }
 
+  // The contact and company a deal is linked to (system consumers, tenant from the context).
+  findParties(id: string): Promise<{ contactId: string | null; companyId: string | null } | null> {
+    return this.prisma.deal.findFirst({
+      where: { id },
+      select: { contactId: true, companyId: true },
+    });
+  }
+
+  // Which of `ids` the caller may see (live deals only). One query for a whole page of references.
+  async findVisibleIds(scope: VisibilityScope, ids: readonly string[]): Promise<Set<string>> {
+    const deals = await this.prisma.deal.findMany({
+      where: applyVisibility<Prisma.DealWhereInput>({ id: { in: [...ids] } }, scope),
+      select: { id: true },
+    });
+    return new Set(deals.map(({ id }) => id));
+  }
+
   findVisible(
     scope: VisibilityScope,
     id: string,

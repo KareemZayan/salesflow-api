@@ -78,6 +78,12 @@ export const ERROR_CODES = {
   // change is not possible from the lead's current status.
   LEAD_ALREADY_CONVERTED: 'LEAD_ALREADY_CONVERTED',
   INVALID_STATUS_TRANSITION: 'INVALID_STATUS_TRANSITION',
+  // A cursor that is malformed, was tampered with or was issued for another organization.
+  INVALID_CURSOR: 'INVALID_CURSOR',
+  // System timeline entries are written by the server only: nobody can delete them (409, shown only
+  // to someone who can already see the entry). Manual entries: author or admin (403 otherwise).
+  ACTIVITY_IMMUTABLE: 'ACTIVITY_IMMUTABLE',
+  ACTIVITY_DELETE_RESTRICTED: 'ACTIVITY_DELETE_RESTRICTED',
   ROLE_NAME_ALREADY_EXISTS: 'ROLE_NAME_ALREADY_EXISTS',
   ROLE_NAME_RESERVED: 'ROLE_NAME_RESERVED',
   ROLE_IN_USE: 'ROLE_IN_USE',

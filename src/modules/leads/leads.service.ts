@@ -17,6 +17,10 @@ import { CreateLeadDto } from './dto/create-lead.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 import { LEAD_ASSIGNED_EVENT, LeadAssignedEvent } from './events/lead-assigned.event';
+import {
+  LEAD_STATUS_CHANGED_EVENT,
+  LeadStatusChangedEvent,
+} from './events/lead-status-changed.event';
 import { LEAD_STATUS_TRANSITIONS } from './lead-status-transitions';
 import {
   LeadAlreadyConvertedException,
@@ -120,21 +124,53 @@ export class LeadsService {
     { status }: ChangeLeadStatusDto,
   ): Promise<LeadRecord> {
     const scope = await this.ownership.resolve(actor);
-    return applyStatusTransition({
+    // The status the compare-and-set actually replaced: set only inside `write`, so an object
+    // (a closure assignment to a plain `let` would not narrow).
+    const applied: { from?: LeadStatus } = {};
+    const lead = await applyStatusTransition({
       map: LEAD_STATUS_TRANSITIONS,
       to: status,
       read: () => this.repository.findVisible(scope, id),
-      write: (from) => this.repository.transitionStatus(scope, id, from, status),
+      write: async (from) => {
+        const written = await this.repository.transitionStatus(scope, id, from, status);
+        if (written) applied.from = from;
+        return written;
+      },
       notFound: () => resourceNotFound('Lead'),
       rejected: rejectedLeadTransition,
       changedConcurrently: concurrentLeadStatusChange,
     });
+    // Reached only when the compare-and-set matched: every rejection above throws first.
+    if (applied.from) this.publishStatusChanged(actor, id, applied.from, status);
+    return lead;
   }
 
   async delete(actor: AuthenticatedUser, id: string): Promise<void> {
     const scope = await this.ownership.resolve(actor);
     const deleted = await this.repository.deleteVisible(scope, id);
     if (!deleted) throw await this.whyNotEditable(scope, id);
+  }
+
+  private publishStatusChanged(
+    actor: AuthenticatedUser,
+    leadId: string,
+    from: LeadStatus,
+    to: LeadStatus,
+  ): void {
+    publishDomainEvent(
+      this.events,
+      this.logger,
+      LEAD_STATUS_CHANGED_EVENT,
+      {
+        organizationId: actor.organizationId,
+        leadId,
+        from,
+        to,
+        actorId: actor.userId,
+        changedAt: new Date(),
+      } satisfies LeadStatusChangedEvent,
+      `lead ${leadId}`,
+    );
   }
 
   // Tells the NEW owner (never the actor creating or taking a lead for themselves). Fire and forget

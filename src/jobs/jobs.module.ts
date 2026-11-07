@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { QueueModule } from '../infrastructure/queue/queue.module';
+import { ActivitiesModule } from '../modules/activities/activities.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { NotificationsModule } from '../modules/notifications/notifications.module';
 import { TasksModule } from '../modules/tasks/tasks.module';
+import { ActivitiesProcessor } from './activities/activities.processor';
 import { RefreshTokenCleanupProcessor } from './auth/refresh-token-cleanup.processor';
 import { OrganizationWorkRepository } from './bootstrap/organization-work.repository';
 import { NotificationRetentionProcessor } from './notifications/notification-retention.processor';
@@ -15,10 +17,11 @@ import { TaskRemindersProcessor } from './tasks/task-reminders.processor';
 // Worker-side consumers, grouped by domain. Each processor registers itself with the queue
 // infrastructure; whether workers actually run is decided by QUEUE_WORKERS_ENABLED.
 @Module({
-  imports: [QueueModule, NotificationsModule, TasksModule, AuthModule],
+  imports: [QueueModule, NotificationsModule, ActivitiesModule, TasksModule, AuthModule],
   providers: [
     OrganizationWorkRepository,
     NotificationsProcessor,
+    ActivitiesProcessor,
     SweepsProcessor,
     SweepSchedulerService,
     TaskRemindersProcessor,

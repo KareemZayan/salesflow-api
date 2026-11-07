@@ -126,8 +126,13 @@ export class TasksService {
     assertReminder({ dueDate: nextDue, reminderAt: nextReminder }, now, reminderChanged);
     if (dueDate !== undefined) changes.dueDate = nextDue;
     if (reminderAt !== undefined) changes.reminderAt = nextReminder;
-    // A moved due date or reminder re-arms the reminder job (Phase 12 skips tasks with it set).
-    if (instantChanged(current.dueDate, nextDue) || reminderChanged) changes.reminderSentAt = null;
+    // A moved reminder re-arms the reminder job and a moved due date re-arms the overdue job (both
+    // skip tasks whose marker is set). The markers are cleared by the SAME UPDATE that changes the
+    // date, so there is no moment with the new date and the old marker. Reopening a task does NOT
+    // clear overdueNotifiedAt: the same dueDate is never notified twice.
+    const dueChanged = instantChanged(current.dueDate, nextDue);
+    if (dueChanged || reminderChanged) changes.reminderSentAt = null;
+    if (dueChanged) changes.overdueNotifiedAt = null;
 
     // Only a link the task does not already have is checked (and, for contact / company, locked).
     // `null` unlinks and needs neither. An unchanged link stays as is, so a task can still be edited

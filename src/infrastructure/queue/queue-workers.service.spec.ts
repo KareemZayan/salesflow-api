@@ -74,6 +74,17 @@ describe('QueueWorkersService', () => {
     expect(handle).toHaveBeenCalledWith(job);
   });
 
+  it('runs a cross-tenant handler without a tenant, and without requiring an organizationId', async () => {
+    const sweepHandle = vi.fn().mockResolvedValue('swept');
+    const service = new QueueWorkersService(configFor(true), tenant);
+    service.register({ queueName: QUEUE_NAMES.SWEEPS, tenantScoped: false, handle: sweepHandle });
+    service.onApplicationBootstrap();
+    const job = { data: {} } as Job;
+    await expect(processors[0](job)).resolves.toBe('swept');
+    expect(run).not.toHaveBeenCalled();
+    expect(sweepHandle).toHaveBeenCalledWith(job);
+  });
+
   it.each([{}, { organizationId: '' }, { organizationId: 7 }, undefined])(
     'fails a job without a usable tenant for good, without calling the handler (%j)',
     (data) => {

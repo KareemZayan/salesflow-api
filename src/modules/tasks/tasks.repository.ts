@@ -23,7 +23,7 @@ import {
 } from './tasks.constants';
 
 // An explicit select: the response shape is decided here, never by whatever the table gains later.
-// `reminderSentAt` is the reminder job's marker and stays internal.
+// `reminderSentAt` and `overdueNotifiedAt` are the scheduled jobs' markers and stay internal.
 const taskSelect = {
   id: true,
   title: true,
@@ -71,11 +71,26 @@ export type TaskChanges = Pick<
   | 'dueDate'
   | 'reminderAt'
   | 'reminderSentAt'
+  | 'overdueNotifiedAt'
   | 'leadId'
   | 'dealId'
   | 'contactId'
   | 'companyId'
 >;
+
+// What the scheduled alerts need about one task; the date is the instant the alert is for.
+export interface DueReminder {
+  id: string;
+  organizationId: string;
+  assigneeId: string;
+  reminderAt: Date;
+}
+export interface OverdueTask {
+  id: string;
+  organizationId: string;
+  assigneeId: string;
+  dueDate: Date;
+}
 
 export type TasksTx = TenantTransactionClient;
 type TaskDb = Pick<TasksTx, 'task'>;
@@ -185,6 +200,49 @@ export class TasksRepository {
         select: taskSelect,
       }),
     );
+  }
+
+  // Open tasks whose reminder time has passed and that were not reminded yet, oldest first, at most
+  // `limit` (the caller's cap per job run; the next run continues with the rest).
+  async findDueReminders(now: Date, limit: number): Promise<DueReminder[]> {
+    const rows = await this.prisma.task.findMany({
+      where: { ...stillOpen, reminderSentAt: null, reminderAt: { lte: now } },
+      orderBy: { reminderAt: 'asc' },
+      take: limit,
+      select: { id: true, organizationId: true, assigneeId: true, reminderAt: true },
+    });
+    return rows.flatMap(({ reminderAt, ...rest }) => (reminderAt ? [{ ...rest, reminderAt }] : []));
+  }
+
+  // Marks the reminder as sent, but only if it is STILL the reminder that was read: unsent AND the
+  // same `reminderAt`. A reminder rescheduled between the read and this write matches nothing, so
+  // the new time is never marked as done and fires on its own. `false` = not marked.
+  async markReminderSent(task: DueReminder, at: Date): Promise<boolean> {
+    const { count } = await this.prisma.task.updateMany({
+      where: { id: task.id, reminderSentAt: null, reminderAt: task.reminderAt },
+      data: { reminderSentAt: at },
+    });
+    return count === 1;
+  }
+
+  // Overdue tasks nobody was told about yet (overdueWhere is the one definition of "overdue").
+  async findOverdueUnnotified(now: Date, limit: number): Promise<OverdueTask[]> {
+    const rows = await this.prisma.task.findMany({
+      where: { ...overdueWhere(now), overdueNotifiedAt: null },
+      orderBy: { dueDate: 'asc' },
+      take: limit,
+      select: { id: true, organizationId: true, assigneeId: true, dueDate: true },
+    });
+    return rows.flatMap(({ dueDate, ...rest }) => (dueDate ? [{ ...rest, dueDate }] : []));
+  }
+
+  // Same rule as markReminderSent: only while still unmarked for the SAME dueDate that was read.
+  async markOverdueNotified(task: OverdueTask, at: Date): Promise<boolean> {
+    const { count } = await this.prisma.task.updateMany({
+      where: { id: task.id, overdueNotifiedAt: null, dueDate: task.dueDate },
+      data: { overdueNotifiedAt: at },
+    });
+    return count === 1;
   }
 
   // Hard delete (Task is not soft-deleted). With `openOnly`, a closed task matches nothing, in the

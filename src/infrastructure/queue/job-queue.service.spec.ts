@@ -1,11 +1,14 @@
 import { Queue } from 'bullmq';
 import { JobQueueService } from './job-queue.service';
-import { QUEUE_NAMES } from './queue.constants';
+import { QUEUE_NAME_LIST, QUEUE_NAMES } from './queue.constants';
+import { QueueRegistry } from './queue.tokens';
 
 const add = vi.fn();
 const isPaused = vi.fn();
 const on = vi.fn();
-const queue = { add, isPaused, on } as unknown as Queue;
+const upsertJobScheduler = vi.fn();
+const queue = { add, isPaused, on, upsertJobScheduler } as unknown as Queue;
+const registry = Object.fromEntries(QUEUE_NAME_LIST.map((name) => [name, queue])) as QueueRegistry;
 const payload = { organizationId: 'org' };
 
 describe('JobQueueService', () => {
@@ -13,12 +16,12 @@ describe('JobQueueService', () => {
   afterEach(() => vi.useRealTimers());
 
   it('attaches an error listener to every queue, so a Redis outage cannot crash the process', () => {
-    new JobQueueService(queue);
+    new JobQueueService(registry);
     expect(on).toHaveBeenCalledWith('error', expect.any(Function));
   });
 
   it('logs a queue error with a readable message even when the client sends an empty one', () => {
-    const service = new JobQueueService(queue);
+    const service = new JobQueueService(registry);
     const log = vi.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
     const handler = on.mock.calls[0][1] as (error: Error) => void;
     const refused = new Error('');
@@ -29,7 +32,7 @@ describe('JobQueueService', () => {
 
   it('adds the job with its id and delay', async () => {
     add.mockResolvedValue({});
-    await new JobQueueService(queue).enqueue(QUEUE_NAMES.NOTIFICATIONS, 'create', payload, {
+    await new JobQueueService(registry).enqueue(QUEUE_NAMES.NOTIFICATIONS, 'create', payload, {
       jobId: 'k-1',
       delayMs: 500,
     });
@@ -38,14 +41,33 @@ describe('JobQueueService', () => {
 
   it('passes a plain add through without options', async () => {
     add.mockResolvedValue({});
-    await new JobQueueService(queue).enqueue(QUEUE_NAMES.NOTIFICATIONS, 'create', payload);
+    await new JobQueueService(registry).enqueue(QUEUE_NAMES.NOTIFICATIONS, 'create', payload);
     expect(add).toHaveBeenCalledWith('create', payload, { jobId: undefined, delay: undefined });
+  });
+
+  it('upserts a repeatable job scheduler with the sweep job options', async () => {
+    upsertJobScheduler.mockResolvedValue({});
+    await new JobQueueService(registry).schedule(
+      QUEUE_NAMES.SWEEPS,
+      'task-reminders',
+      { every: 60_000 },
+      'task-reminders',
+    );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      'task-reminders',
+      { every: 60_000 },
+      expect.objectContaining({
+        name: 'task-reminders',
+        data: {},
+        opts: expect.objectContaining({ attempts: 1 }),
+      }),
+    );
   });
 
   it('rejects instead of hanging when Redis never answers', async () => {
     vi.useFakeTimers();
     add.mockReturnValue(new Promise(() => undefined));
-    const pending = new JobQueueService(queue).enqueue(
+    const pending = new JobQueueService(registry).enqueue(
       QUEUE_NAMES.NOTIFICATIONS,
       'create',
       payload,
@@ -58,17 +80,17 @@ describe('JobQueueService', () => {
   it('propagates an enqueue error to the caller', async () => {
     add.mockRejectedValue(new Error('READONLY'));
     await expect(
-      new JobQueueService(queue).enqueue(QUEUE_NAMES.NOTIFICATIONS, 'create', payload),
+      new JobQueueService(registry).enqueue(QUEUE_NAMES.NOTIFICATIONS, 'create', payload),
     ).rejects.toThrow('READONLY');
   });
 
   it('pings by reading from the queue, and rejects when Redis does not answer', async () => {
     isPaused.mockResolvedValueOnce(false);
-    await expect(new JobQueueService(queue).ping()).resolves.toBeUndefined();
+    await expect(new JobQueueService(registry).ping()).resolves.toBeUndefined();
 
     vi.useFakeTimers();
     isPaused.mockReturnValueOnce(new Promise(() => undefined));
-    const pending = new JobQueueService(queue).ping();
+    const pending = new JobQueueService(registry).ping();
     const assertion = expect(pending).rejects.toThrow('Redis ping timed out');
     await vi.advanceTimersByTimeAsync(2000);
     await assertion;

@@ -8,6 +8,8 @@ import { AuthController } from './auth.controller';
 import { AuthRepository } from './auth.repository';
 import { AuthService } from './auth.service';
 import { PasswordService } from './password.service';
+import { RefreshTokenCleanupRepository } from './refresh-token-cleanup.repository';
+import { RefreshTokenCleanupService } from './refresh-token-cleanup.service';
 import { SessionRevoker } from './session-revoker.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { TokenService } from './token.service';
@@ -38,9 +40,12 @@ import { TokenService } from './token.service';
     TokenService,
     PasswordService,
     SessionRevoker,
+    RefreshTokenCleanupRepository,
+    RefreshTokenCleanupService,
     JwtStrategy,
   ],
-  // Shared with the Users module: one hashing policy, one way to revoke sessions.
-  exports: [PasswordService, SessionRevoker],
+  // Shared with the Users module: one hashing policy, one way to revoke sessions. The clean-up
+  // service is used by the scheduled job (src/jobs).
+  exports: [PasswordService, SessionRevoker, RefreshTokenCleanupService],
 })
 export class AuthModule {}

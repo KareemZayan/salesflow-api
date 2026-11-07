@@ -2,6 +2,13 @@ import { JobsOptions } from 'bullmq';
 
 export const QUEUE_NAMES = {
   NOTIFICATIONS: 'notifications',
+  // Cross-tenant and repeatable: a run only decides WHICH organizations have work, then fans out.
+  SWEEPS: 'sweeps',
+  // One queue per kind of per-organization work, so a slow cleanup can never delay a reminder.
+  TASK_REMINDERS: 'task-reminders',
+  TASK_OVERDUE: 'task-overdue',
+  REFRESH_TOKEN_CLEANUP: 'refresh-token-cleanup',
+  NOTIFICATION_RETENTION: 'notification-retention',
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -26,3 +33,11 @@ export const REDIS_OPERATION_TIMEOUT_MS = 2000;
 
 // How long shutdown waits for running jobs to finish before the workers are closed by force.
 export const WORKER_CLOSE_TIMEOUT_MS = 10_000;
+
+// A repeatable sweep that fails is not retried: the next tick does the same work anyway, and a
+// retry on top would only pile up behind it. Its history is kept short for the same reason.
+export const SWEEP_JOB_OPTIONS: JobsOptions = {
+  attempts: 1,
+  removeOnComplete: { age: 60 * 60, count: 20 },
+  removeOnFail: { age: 24 * 60 * 60, count: 100 },
+};

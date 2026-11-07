@@ -372,6 +372,28 @@ describe('TasksService.update', () => {
       );
     });
 
+    it('moving the due date also re-arms the overdue notice (overdueNotifiedAt back to null)', async () => {
+      repository.findVisible.mockResolvedValue(stored);
+      await service.update(actor, 't1', { dueDate: '2099-07-01T10:00:00Z' });
+      expect(repository.updateOpenVisible).toHaveBeenCalledWith(
+        scope,
+        't1',
+        expect.objectContaining({ overdueNotifiedAt: null }),
+        undefined,
+      );
+    });
+
+    it('moving only the reminder or editing other fields keeps the overdue marker', async () => {
+      repository.findVisible.mockResolvedValue(stored);
+      await service.update(actor, 't1', { reminderAt: '2099-06-01T09:00:00Z', title: 'x' });
+      const [, , changes] = repository.updateOpenVisible.mock.calls[0] as [
+        unknown,
+        unknown,
+        object,
+      ];
+      expect(changes).not.toHaveProperty('overdueNotifiedAt');
+    });
+
     it('re-sending the same instants (in another offset) does not touch the marker', async () => {
       repository.findVisible.mockResolvedValue(stored);
       await service.update(actor, 't1', {

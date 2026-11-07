@@ -38,6 +38,19 @@ describe('NotificationDispatcher', () => {
     await expect(dispatcher.dispatch(job)).resolves.toBeUndefined();
   });
 
+  it('dispatchStrict lets an enqueue failure reach the caller (a scheduled job must retry)', async () => {
+    enqueue.mockRejectedValue(new Error('Redis down'));
+    await expect(dispatcher.dispatchStrict(job)).rejects.toThrow('Redis down');
+  });
+
+  it('dispatchStrict uses the same job id as dispatch', async () => {
+    enqueue.mockResolvedValue(undefined);
+    await dispatcher.dispatchStrict(job);
+    expect(enqueue).toHaveBeenCalledWith(QUEUE_NAMES.NOTIFICATIONS, CREATE_NOTIFICATION_JOB, job, {
+      jobId: 'task.assigned-t-1',
+    });
+  });
+
   it('logs the failure with the key but never the notification content', async () => {
     const logger = vi.spyOn(dispatcher['logger'], 'error').mockImplementation(() => undefined);
     enqueue.mockRejectedValue(new Error('Redis down'));

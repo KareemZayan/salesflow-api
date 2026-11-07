@@ -59,3 +59,38 @@ export function dealStageChangedJob(
     dedupeKey: key('deal.stage_changed', event.dealId, event.changedAt),
   };
 }
+
+// What the scheduled task jobs know about a task, the same fields for both alerts.
+interface TaskAlertSubject {
+  organizationId: string;
+  taskId: string;
+  assigneeId: string;
+}
+
+// The key carries the instant the alert is about (reminderAt / dueDate), so moving that date makes a
+// NEW key: the new reminder is a new fact, while a retry of the old one stays a duplicate.
+export function taskDueSoonJob(
+  task: TaskAlertSubject & { reminderAt: Date },
+): CreateNotificationJob {
+  return {
+    organizationId: task.organizationId,
+    userId: task.assigneeId,
+    type: NotificationType.TASK_DUE_SOON,
+    title: 'A task is coming up',
+    body: null,
+    data: { taskId: task.taskId },
+    dedupeKey: key('task.reminder', task.taskId, task.reminderAt),
+  };
+}
+
+export function taskOverdueJob(task: TaskAlertSubject & { dueDate: Date }): CreateNotificationJob {
+  return {
+    organizationId: task.organizationId,
+    userId: task.assigneeId,
+    type: NotificationType.TASK_OVERDUE,
+    title: 'A task is overdue',
+    body: null,
+    data: { taskId: task.taskId },
+    dedupeKey: key('task.overdue', task.taskId, task.dueDate),
+  };
+}

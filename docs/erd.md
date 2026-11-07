@@ -229,6 +229,7 @@ erDiagram
         datetime completedAt
         datetime reminderAt
         datetime reminderSentAt "idempotency for reminder job"
+        datetime overdueNotifiedAt "idempotency for the overdue notice, cleared when dueDate changes"
         uuid leadId FK "nullable"
         uuid dealId FK "nullable"
         uuid contactId FK "nullable"

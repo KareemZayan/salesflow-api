@@ -544,18 +544,24 @@ model Notification {
 }
 
 // The only polymorphic table: `entityId` has no FK so the log outlives the entity it describes.
+// Append-only: a database trigger (migration add_audit_log_event_request_id_and_immutability)
+// rejects UPDATE and DELETE; only the retention job may delete (ADR 0014).
 model AuditLog {
   id             String      @id @default(uuid())
   organizationId String
   // Null = performed by the system.
   actorId        String?
   action         AuditAction
+  // A plain string on purpose (a new event needs no migration); the allowed values are the
+  // AUDIT_EVENTS list in code, enforced by AuditService.record.
+  event          String
   entityType     String
   entityId       String
   before         Json?
   after          Json?
   ipAddress      String?
   userAgent      String?
+  requestId      String?
   createdAt      DateTime    @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -564,4 +570,6 @@ model AuditLog {
   @@unique([id, organizationId])
   @@index([organizationId, entityType, entityId, createdAt(sort: Desc)])
   @@index([organizationId, actorId, createdAt(sort: Desc)])
+  // The unfiltered list, the date-range filter and the retention job.
+  @@index([organizationId, createdAt(sort: Desc)])
 }

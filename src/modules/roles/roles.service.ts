@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { ERROR_CODES } from '../../common/constants/error-codes';
 import { ADMIN_ROLE_NAME, SYSTEM_ROLE_NAMES } from '../../common/constants/roles';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
@@ -6,15 +6,18 @@ import { DomainException } from '../../common/exceptions/domain.exception';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { assertMayGrant } from '../../common/utils/permission-escalation.util';
 import { isUniqueViolation } from '../../common/utils/prisma-error.util';
+import { AuditService } from '../audit-logs/audit.service';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { ListRolesQueryDto } from './dto/list-roles-query.dto';
 import { PermissionResponseDto, RoleResponseDto } from './dto/role-response.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { RoleRecord, RolesRepository, RolesTx } from './roles.repository';
 
-type RoleEvent = 'role.created' | 'role.updated' | 'role.deleted';
-
 const keysOf = (role: RoleRecord): string[] => role.permissions.map((p) => p.permission.key);
+
+// The audited fields of a role (audit-fields.ts is the allowlist). Sorted: the order of a permission
+// set is not a change. The description is free text and is not audited.
+const auditedOf = (role: RoleRecord) => ({ name: role.name, permissionKeys: keysOf(role).sort() });
 
 const toDto = (role: RoleRecord): RoleResponseDto => ({
   id: role.id,
@@ -32,9 +35,10 @@ const sameSet = (a: string[], b: string[]): boolean =>
 
 @Injectable()
 export class RolesService {
-  private readonly logger = new Logger(RolesService.name);
-
-  constructor(private readonly repository: RolesRepository) {}
+  constructor(
+    private readonly repository: RolesRepository,
+    private readonly audit: AuditService,
+  ) {}
 
   async list(query: ListRolesQueryDto): Promise<PaginatedResponseDto<RoleResponseDto>> {
     const page = await this.repository.findPage(query);
@@ -57,7 +61,7 @@ export class RolesService {
         await this.assertNameAllowed(dto.name, undefined, tx);
         assertMayGrant(actor, dto.permissionKeys);
         const permissionIds = await this.resolvePermissionIds(dto.permissionKeys, tx);
-        return this.repository.create(
+        const created = await this.repository.create(
           {
             organizationId: actor.organizationId,
             name: dto.name,
@@ -66,9 +70,14 @@ export class RolesService {
           },
           tx,
         );
+        await this.audit.record(tx, {
+          event: 'role.created',
+          entityId: created.id,
+          after: auditedOf(created),
+        });
+        return created;
       }),
     );
-    this.record('role.created', actor, role.id);
     return toDto(role);
   }
 
@@ -101,10 +110,25 @@ export class RolesService {
           const permissionIds = await this.resolvePermissionIds(dto.permissionKeys ?? [], tx);
           await this.repository.replacePermissions(id, permissionIds, tx);
         }
-        return this.requireRole(id, tx);
+        const updated = await this.requireRole(id, tx);
+        // Two events, so "who renamed it" and "who changed what it may do" filter separately; each
+        // stores only its own field and is skipped when that field did not change.
+        const [before, after] = [auditedOf(current), auditedOf(updated)];
+        await this.audit.record(tx, {
+          event: 'role.updated',
+          entityId: id,
+          before: { name: before.name },
+          after: { name: after.name },
+        });
+        await this.audit.record(tx, {
+          event: 'role.permissions_changed',
+          entityId: id,
+          before: { permissionKeys: before.permissionKeys },
+          after: { permissionKeys: after.permissionKeys },
+        });
+        return updated;
       }),
     );
-    this.record('role.updated', actor, id);
     return toDto(role);
   }
 
@@ -122,8 +146,12 @@ export class RolesService {
         );
       }
       await this.repository.delete(id, tx);
+      await this.audit.record(tx, {
+        event: 'role.deleted',
+        entityId: id,
+        before: auditedOf(role),
+      });
     });
-    this.record('role.deleted', actor, id);
   }
 
   private isAdminRole(role: RoleRecord): boolean {
@@ -177,15 +205,6 @@ export class RolesService {
       if (isUniqueViolation(error)) throw this.nameTaken();
       throw error;
     }
-  }
-
-  private record(event: RoleEvent, actor: AuthenticatedUser, roleId: string): void {
-    this.logger.log({
-      event,
-      organizationId: actor.organizationId,
-      actorId: actor.userId,
-      roleId,
-    });
   }
 
   private notFound(): DomainException {

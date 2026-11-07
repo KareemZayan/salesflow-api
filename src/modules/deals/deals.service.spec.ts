@@ -1,4 +1,4 @@
-import { HttpException, Logger } from '@nestjs/common';
+import { HttpException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma } from '../../generated/prisma/client';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -6,6 +6,7 @@ import { OwnershipScopeService } from '../../common/visibility/ownership-scope.s
 import { VisibilityScope } from '../../common/visibility/visibility.types';
 import { DealStatus } from '../../generated/prisma/client';
 import { LockRequest } from '../../infrastructure/prisma/advisory-lock';
+import { AuditService } from '../audit-logs/audit.service';
 import { CompaniesService } from '../companies/companies.service';
 import { ContactsService } from '../contacts/contacts.service';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -28,6 +29,7 @@ const companies = { assertLinkable: vi.fn() };
 const contacts = { assertLinkable: vi.fn() };
 const organizations = { getCurrent: vi.fn() };
 const emitAsync = vi.fn();
+const audit = { record: vi.fn() };
 const service = new DealsService(
   repository as unknown as DealsRepository,
   ownership as unknown as OwnershipScopeService,
@@ -36,6 +38,7 @@ const service = new DealsService(
   contacts as unknown as ContactsService,
   organizations as unknown as OrganizationsService,
   { emitAsync } as unknown as EventEmitter2,
+  audit as unknown as AuditService,
 );
 
 const actor: AuthenticatedUser = {
@@ -205,28 +208,43 @@ describe('DealsService.update', () => {
     });
   });
 
-  it('logs amount and currency changes with old and new values, ids only', async () => {
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  it('audits amount and currency as strings, with old and new values, in the same transaction', async () => {
+    repository.findVisible.mockResolvedValue(deal());
     repository.updateOpenVisible.mockResolvedValue(
       deal({ amount: new Prisma.Decimal('2000'), currency: 'EUR' }),
     );
     await service.update(actor, 'd1', { amount: '2000', currency: 'EUR' });
-    expect(log).toHaveBeenCalledWith({
+    expect(repository.updateOpenVisible).toHaveBeenCalledWith(scope, 'd1', expect.anything(), tx);
+    expect(audit.record).toHaveBeenCalledWith(tx, {
       event: 'deal.money_changed',
-      organizationId: 'org',
-      dealId: 'd1',
-      actorId: 'me',
-      amount: { from: '1250.50', to: '2000.00' },
-      currency: { from: 'USD', to: 'EUR' },
+      entityId: 'd1',
+      before: { amount: '1250.50', currency: 'USD' },
+      after: { amount: '2000.00', currency: 'EUR' },
     });
-    log.mockRestore();
   });
 
-  it('does not log when the values did not change', async () => {
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    await service.update(actor, 'd1', { amount: '1250.50' });
-    expect(log).not.toHaveBeenCalled();
-    log.mockRestore();
+  it('reads the "before" inside the transaction, right before the write', async () => {
+    repository.findVisible.mockResolvedValue(deal());
+    await service.update(actor, 'd1', { amount: '5' });
+    expect(repository.findVisible).toHaveBeenLastCalledWith(scope, 'd1', tx);
+  });
+
+  it('records nothing for an edit that does not touch money', async () => {
+    await service.update(actor, 'd1', { title: 'Renamed' });
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when the update matched no editable deal', async () => {
+    repository.findVisible.mockResolvedValue(deal());
+    repository.updateOpenVisible.mockResolvedValue(null);
+    await failure(service.update(actor, 'd1', { amount: '5' }));
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('fails the edit when the audit insert fails (the error reaches the transaction)', async () => {
+    repository.findVisible.mockResolvedValue(deal());
+    audit.record.mockRejectedValue(new Error('audit down'));
+    await expect(service.update(actor, 'd1', { amount: '5' })).rejects.toThrow('audit down');
   });
 });
 

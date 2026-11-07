@@ -1,6 +1,7 @@
 import { HttpException, Logger } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { AuditService } from '../audit-logs/audit.service';
 import { PasswordService } from '../auth/password.service';
 import { SessionRevoker } from '../auth/session-revoker.service';
 import { UserRecord, UsersRepository } from './users.repository';
@@ -24,10 +25,12 @@ const passwords = {
   hash: vi.fn().mockResolvedValue('hashed'),
 } as unknown as PasswordService;
 const sessions = { revokeAllForUser: vi.fn() };
+const audit = { record: vi.fn() };
 const service = new UsersService(
   repository as unknown as UsersRepository,
   passwords,
   sessions as unknown as SessionRevoker,
+  audit as unknown as AuditService,
 );
 
 const actorOf = (overrides: Partial<AuthenticatedUser> = {}): AuthenticatedUser => ({
@@ -340,6 +343,20 @@ describe('UsersService.resetPassword', () => {
     expect(JSON.stringify(vi.mocked(Logger.prototype.log).mock.calls)).not.toContain(
       'super-secret-temp-1',
     );
+    // The audit row is the event alone, written in the same transaction (TX): no password, no hash.
+    expect(audit.record).toHaveBeenCalledWith(TX, {
+      event: 'user.password_reset',
+      entityId: 'target',
+    });
+    expect(JSON.stringify(audit.record.mock.calls)).not.toContain('super-secret-temp-1');
+  });
+
+  it('does not report success when the audit insert fails', async () => {
+    usersById(userOf());
+    audit.record.mockRejectedValue(new Error('audit down'));
+    await expect(
+      service.resetPassword(actorOf(), 'target', { temporaryPassword: 'super-secret-temp-1' }),
+    ).rejects.toThrow('audit down');
   });
 });
 

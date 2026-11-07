@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { VisibilityModule } from '../../common/visibility/visibility.module';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { CompaniesModule } from '../companies/companies.module';
 import { ContactsModule } from '../contacts/contacts.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
@@ -15,6 +16,7 @@ import { DealsService } from './deals.service';
     CompaniesModule,
     ContactsModule,
     OrganizationsModule,
+    AuditLogsModule,
   ],
   controllers: [DealsController],
   providers: [DealsService, DealsRepository],

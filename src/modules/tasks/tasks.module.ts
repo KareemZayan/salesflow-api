@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { VisibilityModule } from '../../common/visibility/visibility.module';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { CompaniesModule } from '../companies/companies.module';
 import { ContactsModule } from '../contacts/contacts.module';
 import { DealsModule } from '../deals/deals.module';
@@ -18,6 +19,7 @@ import { TasksService } from './tasks.service';
     ContactsModule,
     CompaniesModule,
     NotificationsModule,
+    AuditLogsModule,
   ],
   controllers: [TasksController],
   providers: [TasksService, TasksRepository, TaskAlertsService],

@@ -40,12 +40,13 @@ describe('SweepsProcessor', () => {
     expect(processor.tenantScoped).toBe(false);
   });
 
-  it('defines the four sweeps with the documented cadence', () => {
+  it('defines the five sweeps with the documented cadence', () => {
     expect(processor.sweeps.map(({ name, repeat }) => [name, repeat])).toEqual([
       ['task-reminders', { every: MINUTE }],
       ['task-overdue', { every: 15 * MINUTE }],
       ['refresh-token-cleanup', { pattern: '15 3 * * *' }],
       ['notification-retention', { pattern: '30 3 * * *' }],
+      ['audit-retention', { pattern: '45 3 * * *' }],
     ]);
   });
 

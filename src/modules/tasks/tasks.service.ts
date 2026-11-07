@@ -16,6 +16,7 @@ import { CompaniesService } from '../companies/companies.service';
 import { ContactsService } from '../contacts/contacts.service';
 import { DealsService } from '../deals/deals.service';
 import { LeadsService } from '../leads/leads.service';
+import { AuditService } from '../audit-logs/audit.service';
 import { ChangeTaskStatusDto } from './dto/change-task-status.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { ListTasksQueryDto } from './dto/list-tasks-query.dto';
@@ -48,6 +49,7 @@ export class TasksService {
     private readonly contacts: ContactsService,
     private readonly companies: CompaniesService,
     private readonly events: EventEmitter2,
+    private readonly audit: AuditService,
   ) {}
 
   async list(
@@ -148,9 +150,23 @@ export class TasksService {
     if (newLead) await this.leads.assertLinkable(scope, newLead);
     if (newDeal) await this.deals.assertLinkable(scope, newDeal);
 
-    const updated = await this.writeLinked(scope, newCompany, newContact, (db) =>
-      this.repository.updateOpenVisible(scope, id, changes, db),
-    );
+    // A real reassignment is audited in the SAME transaction as the update (nothing is written, and
+    // nothing is audited, when the update matched no editable task).
+    const updateTask = (db?: TasksTx) => this.repository.updateOpenVisible(scope, id, changes, db);
+    const updated = newAssignee
+      ? await this.writeAtomically(scope, newCompany, newContact, async (db) => {
+          const result = await updateTask(db);
+          if (result) {
+            await this.audit.record(db, {
+              event: 'task.reassigned',
+              entityId: id,
+              before: { assigneeId: current.assigneeId },
+              after: { assigneeId: result.assigneeId },
+            });
+          }
+          return result;
+        })
+      : await this.writeLinked(scope, newCompany, newContact, updateTask);
     if (!updated) throw await this.whyNotEditable(scope, id);
 
     if (newAssignee) this.publishAssigned(actor, id, newAssignee, current.assigneeId, now);
@@ -182,21 +198,25 @@ export class TasksService {
   // Hard delete. A closed (COMPLETED / CANCELLED) task is part of the history of the work, so only an
   // ADMIN may delete it: for everyone else it is excluded in the same statement as the delete, and a
   // miss on a task they can see answers 403 (a task they cannot see is the usual 404).
-  // Audit TODO (Phase 13): record this delete in the audit log; until then the structured log keeps
-  // who deleted which task (ids only, no content).
+  // The delete and its audit row (who it was assigned to; no title or text) are one transaction.
   async delete(actor: AuthenticatedUser, id: string): Promise<void> {
     const scope = await this.ownership.resolve(actor);
     const openOnly = actor.role !== ADMIN_ROLE_NAME;
-    if (!(await this.repository.deleteVisible(scope, id, openOnly))) {
+    const deleted = await this.repository.inLocks([], async (tx) => {
+      const removed = await this.repository.deleteVisible(scope, id, openOnly, tx);
+      if (removed) {
+        await this.audit.record(tx, {
+          event: 'task.deleted',
+          entityId: id,
+          before: { assigneeId: removed.assigneeId },
+        });
+      }
+      return removed;
+    });
+    if (!deleted) {
       const task = openOnly ? await this.repository.findVisible(scope, id) : null;
       throw task && !isOpenTask(task.status) ? taskDeleteRestricted() : resourceNotFound('Task');
     }
-    this.logger.log({
-      event: 'task.deleted',
-      organizationId: actor.organizationId,
-      taskId: id,
-      actorId: actor.userId,
-    });
   }
 
   // Runs `write` in a transaction holding SHARED company / contact locks (order company -> contact)
@@ -209,11 +229,22 @@ export class TasksService {
     contactId: string | undefined,
     write: (db?: TasksTx) => Promise<T>,
   ): Promise<T> {
+    if (!companyId && !contactId) return write();
+    return this.writeAtomically(scope, companyId, contactId, write);
+  }
+
+  // Always a transaction (with no locks when no contact / company link is changing), for a write
+  // that must commit together with its audit row.
+  private writeAtomically<T>(
+    scope: VisibilityScope,
+    companyId: string | undefined,
+    contactId: string | undefined,
+    write: (db: TasksTx) => Promise<T>,
+  ): Promise<T> {
     const locks: LockRequest[] = [
       ...(companyId ? [{ kind: 'company' as const, id: companyId, mode: 'shared' as const }] : []),
       ...(contactId ? [{ kind: 'contact' as const, id: contactId, mode: 'shared' as const }] : []),
     ];
-    if (locks.length === 0) return write();
     return this.repository.inLocks(locks, async (tx) => {
       if (companyId) await this.companies.assertLinkable(tx, scope, companyId);
       if (contactId) await this.contacts.assertLinkable(tx, scope, contactId);

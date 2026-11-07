@@ -10,6 +10,11 @@ import { PasswordChangeRequiredGuard } from './guards/password-change-required.g
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { authThrottleTracker, isAuthThrottled } from './guards/throttle.util';
+import {
+  HTTP_REQUEST_KEY,
+  RequestLike,
+  RequestMetadataService,
+} from './request-context/request-metadata.service';
 import { TenantContextService } from './tenant/tenant-context.service';
 
 export const AUTH_THROTTLER = 'auth';
@@ -17,7 +22,15 @@ export const AUTH_THROTTLER = 'auth';
 @Global()
 @Module({
   imports: [
-    ClsModule.forRoot({ global: true, middleware: { mount: true } }),
+    ClsModule.forRoot({
+      global: true,
+      middleware: {
+        mount: true,
+        // The request itself, read lazily by RequestMetadataService (audit trail: ip, user agent,
+        // request id).
+        setup: (cls, req: RequestLike) => cls.set(HTTP_REQUEST_KEY, req),
+      },
+    }),
     // In-memory counters: fine for one instance, reset on restart. Move the storage to Redis
     // (@nest-lab/throttler-storage-redis) before running more than one API instance.
     ThrottlerModule.forRootAsync({
@@ -46,6 +59,7 @@ export const AUTH_THROTTLER = 'auth';
   ],
   providers: [
     TenantContextService,
+    RequestMetadataService,
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     // Order matters: throttle first (cheap, protects the rest), then identity, then
     // "must change password", then role and permission checks that need the identity.
@@ -55,6 +69,6 @@ export const AUTH_THROTTLER = 'auth';
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
-  exports: [TenantContextService],
+  exports: [TenantContextService, RequestMetadataService],
 })
 export class CommonModule {}

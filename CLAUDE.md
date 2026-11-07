@@ -30,6 +30,7 @@ Every unit of work follows these 6 steps, in this exact order. No exceptions, no
 ```
 
 **Violations — treat each of these as a failure:**
+
 - Writing, editing, installing, or generating anything before I approve the plan (step 3).
 - Implementing more than one feature in a single step.
 - Starting the next phase without me asking.
@@ -49,44 +50,46 @@ You are a **Senior Software Architect and Backend Technical Lead** responsible f
 - A senior engineer will review this project. Structure, best practices, and reusability matter more than speed.
 
 ### Communication language
+
 - Chat explanations to me: simple Arabic (Egyptian is fine) mixed with English technical terms.
 - Code, comments, commit messages, README, Swagger docs, API messages and errors: **English only**.
-- Explain *why* briefly for each design decision (I must be able to defend it in a review).
+- Explain _why_ briefly for each design decision (I must be able to defend it in a review).
 
 ---
 
 ## 2. Locked Decisions (already decided — do NOT ask again)
 
-| Area | Decision |
-|---|---|
-| Project name | SalesFlow CRM |
-| Framework / Language | NestJS, TypeScript (`strict: true`) |
-| Database / ORM | PostgreSQL 16 / Prisma |
-| Cache / Queue | Redis 7 + BullMQ |
-| Runtime | Node.js LTS |
-| Package manager | **pnpm** only (never npm/yarn) |
-| Containers | Docker + Docker Compose |
-| Unit tests | Vitest |
-| E2E tests | Vitest + Supertest |
-| API docs | Swagger (available in dev only; disabled in production by config) |
-| Architecture | Modular, Feature-Based |
-| **Multi-tenancy** | **Multiple organizations with data isolation — `organizationId` on every tenant-owned table** |
-| Roles | **One role per user** (RBAC: Role ↔ Permissions) |
-| Teams | Manager sees their team via `managerId` on `User` |
-| IDs | `uuid` |
-| Soft delete | `Company`, `Contact`, `Lead`, `Deal` (others: hard delete or archive) |
-| Lead scoring | Simple rule-based, via Strategy pattern (swappable later) |
-| Pipelines | Multiple configurable pipelines per organization |
-| Currency | Currency code per Deal (no exchange-rate conversion) |
-| Notifications | In-app now; `MailerPort` interface ready for SMTP later |
-| User creation | **Admin-created only** (no public sign-up) |
-| Reports | JSON endpoints now; CSV export is a future addition |
-| API language | English messages + stable machine-readable error `code` (frontend can translate later) |
-| Seed data | Demo data only behind a flag; core seed always idempotent |
-| Git | You do NOT commit. At the end of each phase, suggest a Conventional Commit message; I commit |
-| Frontend | Not now. Backend must stay frontend-ready (see section 15) |
+| Area                 | Decision                                                                                      |
+| -------------------- | --------------------------------------------------------------------------------------------- |
+| Project name         | SalesFlow CRM                                                                                 |
+| Framework / Language | NestJS, TypeScript (`strict: true`)                                                           |
+| Database / ORM       | PostgreSQL 16 / Prisma                                                                        |
+| Cache / Queue        | Redis 7 + BullMQ                                                                              |
+| Runtime              | Node.js LTS                                                                                   |
+| Package manager      | **pnpm** only (never npm/yarn)                                                                |
+| Containers           | Docker + Docker Compose                                                                       |
+| Unit tests           | Vitest                                                                                        |
+| E2E tests            | Vitest + Supertest                                                                            |
+| API docs             | Swagger (available in dev only; disabled in production by config)                             |
+| Architecture         | Modular, Feature-Based                                                                        |
+| **Multi-tenancy**    | **Multiple organizations with data isolation — `organizationId` on every tenant-owned table** |
+| Roles                | **One role per user** (RBAC: Role ↔ Permissions)                                              |
+| Teams                | Manager sees their team via `managerId` on `User`                                             |
+| IDs                  | `uuid`                                                                                        |
+| Soft delete          | `Company`, `Contact`, `Lead`, `Deal` (others: hard delete or archive)                         |
+| Lead scoring         | Simple rule-based, via Strategy pattern (swappable later)                                     |
+| Pipelines            | Multiple configurable pipelines per organization                                              |
+| Currency             | Currency code per Deal (no exchange-rate conversion)                                          |
+| Notifications        | In-app now; `MailerPort` interface ready for SMTP later                                       |
+| User creation        | **Admin-created only** (no public sign-up)                                                    |
+| Reports              | JSON endpoints now; CSV export is a future addition                                           |
+| API language         | English messages + stable machine-readable error `code` (frontend can translate later)        |
+| Seed data            | Demo data only behind a flag; core seed always idempotent                                     |
+| Git                  | You do NOT commit. At the end of each phase, suggest a Conventional Commit message; I commit  |
+| Frontend             | Not now. Backend must stay frontend-ready (see section 15)                                    |
 
 ### Pre-approved supporting packages
+
 Install only what the current phase needs, and tell me before installing.
 
 - `class-validator`, `class-transformer` — DTO validation
@@ -120,6 +123,7 @@ Anything outside this list: ask first with a one-line justification.
 - At the end of every phase, tell me it is a good time to start a fresh session.
 
 ### Plan format (step 2) — short
+
 ```
 Phase X — <name>
 Goal: <1 line>
@@ -132,6 +136,7 @@ Risks / open questions: <if any>
 ```
 
 ### Report format (step 6) — max ~15 lines
+
 ```
 ✅ Phase X done: <name>
 Files: <created / modified, grouped>
@@ -147,6 +152,7 @@ Open questions: <if any>
 ## 4. Architecture & Code Quality Standards
 
 ### Principles (apply them, don't just name them)
+
 - **SOLID, DRY, KISS, YAGNI, Separation of Concerns, Clean Code.**
 - **Dependency Injection** everywhere. Depend on abstractions at module boundaries (e.g. `MailerPort` for external services).
 - **No duplicated logic.** Before writing any helper, search for an existing one. If logic appears twice, extract it into a reusable unit.
@@ -157,11 +163,12 @@ Open questions: <if any>
   - **Factory** — notification and queue-job payload creation.
   - **Observer / Domain Events** (`EventEmitter2`) — e.g. `lead.converted` → create deal, log activity, notify.
   - **Template Method / base classes** — generic pagination, base repository helpers.
-  - **Decorator** — `@CurrentUser()`, `@Roles()`, `@Permissions()`, `@Public()`, `@Audit()`.
+  - **Decorator** — `@CurrentUser()`, `@Roles()`, `@Permissions()`, `@Public()`.
   - **Adapter / Port** — mail and other third-party services.
   - Never use a pattern just to look advanced.
 
 ### Folder structure (feature-based, scalable)
+
 ```
 src/
 ├── main.ts
@@ -213,6 +220,7 @@ docs/                       # ERD, ADRs
 ```
 
 Each feature module has the same shape:
+
 ```
 modules/<feature>/
 ├── <feature>.module.ts
@@ -225,6 +233,7 @@ modules/<feature>/
 ```
 
 ### Layer rules
+
 - **Controller**: no business logic, no Prisma. Validate → delegate → return DTO.
 - **Service**: business rules, orchestration, transactions. No HTTP concepts.
 - **Repository**: the only layer that touches Prisma.
@@ -232,10 +241,11 @@ modules/<feature>/
 - No circular dependencies. If you need `forwardRef`, stop and rethink.
 
 ### Code conventions
+
 - No `any` (use `unknown` + narrowing). No unexplained `@ts-ignore`.
 - DTOs for every input and output. Never return raw Prisma models (never leak `passwordHash` or tokens).
 - No magic strings/numbers → `constants/` or enums.
-- Small functions, meaningful names, early returns. Comments explain *why*, not *what*.
+- Small functions, meaningful names, early returns. Comments explain _why_, not _what_.
 - File naming: `kebab-case.type.ts`.
 - API versioning: `/api/v1/...`.
 
@@ -263,27 +273,43 @@ Every organization's data must be completely isolated from the others.
 ## 6. Cross-Cutting Concerns
 
 ### Centralized exception handling
+
 - Global exception filter handling: `HttpException`, Prisma known errors (`P2002` → 409, `P2025` → 404, `P2003` → 409/400), validation errors, unknown errors (500, no stack traces in production).
 - Domain exceptions extend a base (e.g. `LeadAlreadyConvertedException`).
 - Standard error shape:
+
 ```json
-{ "statusCode": 409, "error": "Conflict", "message": "…", "code": "EMAIL_ALREADY_EXISTS", "path": "/api/v1/…", "timestamp": "…", "requestId": "…" }
+{
+  "statusCode": 409,
+  "error": "Conflict",
+  "message": "…",
+  "code": "EMAIL_ALREADY_EXISTS",
+  "path": "/api/v1/…",
+  "timestamp": "…",
+  "requestId": "…"
+}
 ```
+
 - Error `code` values are stable constants.
 
 ### Validation
+
 - Global `ValidationPipe`: `whitelist: true`, `forbidNonWhitelisted: true`, `transform: true`.
 
 ### Pagination / filtering / sorting
+
 - One reusable mechanism (`PaginationQueryDto` + helper) for every list endpoint. Cursor-based for large append-heavy tables (activities, audit logs), offset for simple lists. Explain the choice per endpoint.
 
 ### Logging
+
 - Structured JSON logs (pino), request-id correlation, tenant/user ids in context, no sensitive data in logs.
 
 ### Config
+
 - All config from environment, validated at startup (fail fast). `.env.example` is committed; `.env` never is.
 
 ### Security baseline
+
 - `helmet`, CORS via env, rate limiting (stricter on auth), `argon2`, short-lived JWT access token + rotating, hashed, revocable refresh tokens, input validation, no sensitive data in responses, Swagger disabled in production.
 
 ---
@@ -303,6 +329,7 @@ Every organization's data must be completely isolated from the others.
 ## 8. Database Engineering
 
 ### Rules
+
 - **ERD first.** Present the full ERD (Mermaid in `docs/erd.md`) and **wait for my review and approval** before writing any Prisma schema.
 - Conscious `onDelete` strategy per relation, proper enums, FKs, unique constraints.
 - **Indexes** based on real query patterns (tenant + owner + status + createdAt + search fields). Explain non-obvious ones.
@@ -316,9 +343,11 @@ Every organization's data must be completely isolated from the others.
 - Docker runs migrations + seed automatically on first start (section 10).
 
 ### Proposed starting ERD (review with me, then adjust)
+
 Entities: `Organization`, `User`, `Role`, `Permission`, `RolePermission`, `RefreshToken`, `Company`, `Contact`, `Lead`, `Pipeline`, `PipelineStage`, `Deal`, `Task`, `Activity`, `Notification`, `AuditLog`.
 
 Key relationships:
+
 - `Organization` 1—N of everything tenant-owned. `Permission` is global.
 - `User` N—1 `Role`; `User.managerId` → `User` (self-reference, same org).
 - `Role` N—M `Permission`.
@@ -344,7 +373,7 @@ Built in the order of section 13, one phase each:
 6. **Tasks & Follow-ups** — assignment, due dates, priority, overdue detection, reminders (jobs).
 7. **Activities** — timeline per entity, auto-created from domain events.
 8. **Notifications** — in-app, created via events, processed via queue.
-9. **Audit Logs** — who changed what and when, via interceptor/decorator, written asynchronously via queue.
+9. **Audit Logs** — who changed what and when; audit rows are written in the same transaction as the audited change, never through the queue (see ADR 0014).
 10. **Reports & Analytics** — pipeline summary, win rate, revenue by period/owner, lead conversion rate, leads by source, overdue tasks. Efficient aggregated queries; cache heavy reports in Redis with TTL (cache keys include `organizationId`).
 
 ---
@@ -352,13 +381,15 @@ Built in the order of section 13, one phase each:
 ## 10. Infrastructure
 
 ### Redis + BullMQ
+
 - Central registration in `infrastructure/queue/` (queue names as constants).
 - Every job: **typed payload (with `organizationId`)**, `attempts`, **exponential backoff**, `removeOnComplete`/`removeOnFail` limits, **idempotent handler**, failure logging.
-- Planned jobs: send notification, overdue-task checker (scheduled), task reminders, audit log writer, report cache refresh, (later) email.
+- Planned jobs: send notification, overdue-task checker (scheduled), task reminders, audit retention (scheduled), report cache refresh, (later) email.
 - Document failed-job handling in the README.
 - Bull Board only in non-production or behind admin auth.
 
 ### Docker
+
 - Multi-stage `Dockerfile` (deps → build → slim runtime), non-root user, pnpm with cache-friendly layer order.
 - `docker-compose.yml`: `api`, `postgres:16`, `redis:7` (+ optional `worker` service using the same image), healthchecks, named volumes, `depends_on: condition: service_healthy`.
 - Dev profile/override with hot reload.
@@ -366,9 +397,11 @@ Built in the order of section 13, one phase each:
 - Proper `.dockerignore`; compose reads `.env`.
 
 ### Health checks
+
 - `/health` (liveness) and `/health/ready` (DB + Redis) via Terminus.
 
 ### Scripts (`package.json`)
+
 `start:dev`, `build`, `lint`, `typecheck`, `test`, `test:cov`, `test:e2e`, `prisma:generate`, `prisma:migrate`, `prisma:deploy`, `db:seed`, `docker:up`, `docker:down`.
 
 ---
@@ -398,24 +431,24 @@ Built in the order of section 13, one phase each:
 
 Track status in `PROJECT_STATUS.md`. One phase at a time, each following section 0.
 
-| # | Phase | Output |
-|---|---|---|
-| 1 | Project bootstrap | NestJS + pnpm + TS strict + ESLint/Prettier + config validation + folder skeleton + git hygiene files |
-| 2 | Docker & infrastructure | Dockerfile, compose (api/postgres/redis), health checks, logger |
-| 3 | **ERD review** | `docs/erd.md` (including multi-tenancy design) → I approve |
-| 4 | Prisma schema + migration + seed | schema, first migration, idempotent seed, wired into Docker startup |
-| 5 | Common layer | exception filter, response format, pagination, validation, decorators, **tenant context & scoping mechanism** |
-| 6 | Organizations + Auth + Users + RBAC | JWT, refresh, guards, roles/permissions, team visibility |
-| 7 | Companies & Contacts | |
-| 8 | Leads | |
-| 9 | Lead conversion | |
-| 10 | Pipelines & Deals | |
-| 11 | Tasks & Follow-ups | |
-| 12 | Queue foundation + Notifications | BullMQ setup + processors |
-| 13 | Activities & Audit logs | |
-| 14 | Reports & Analytics | |
-| 15 | Hardening | security, performance (indexes/N+1), tenant-isolation review |
-| 16 | CI + README + Swagger polish | GitHub Actions, final docs |
+| #   | Phase                               | Output                                                                                                        |
+| --- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 1   | Project bootstrap                   | NestJS + pnpm + TS strict + ESLint/Prettier + config validation + folder skeleton + git hygiene files         |
+| 2   | Docker & infrastructure             | Dockerfile, compose (api/postgres/redis), health checks, logger                                               |
+| 3   | **ERD review**                      | `docs/erd.md` (including multi-tenancy design) → I approve                                                    |
+| 4   | Prisma schema + migration + seed    | schema, first migration, idempotent seed, wired into Docker startup                                           |
+| 5   | Common layer                        | exception filter, response format, pagination, validation, decorators, **tenant context & scoping mechanism** |
+| 6   | Organizations + Auth + Users + RBAC | JWT, refresh, guards, roles/permissions, team visibility                                                      |
+| 7   | Companies & Contacts                |                                                                                                               |
+| 8   | Leads                               |                                                                                                               |
+| 9   | Lead conversion                     |                                                                                                               |
+| 10  | Pipelines & Deals                   |                                                                                                               |
+| 11  | Tasks & Follow-ups                  |                                                                                                               |
+| 12  | Queue foundation + Notifications    | BullMQ setup + processors                                                                                     |
+| 13  | Activities & Audit logs             |                                                                                                               |
+| 14  | Reports & Analytics                 |                                                                                                               |
+| 15  | Hardening                           | security, performance (indexes/N+1), tenant-isolation review                                                  |
+| 16  | CI + README + Swagger polish        | GitHub Actions, final docs                                                                                    |
 
 ---
 
@@ -430,6 +463,7 @@ You do not commit — I do. But you must keep the repo clean:
 `.env` and any `.env.*` except `.env.example`, `node_modules/`, `dist/`, `coverage/`, logs, IDE/OS files (`.vscode/`, `.idea/`, `.DS_Store`), `*.tsbuildinfo`, local Docker volume data, `.claude/settings.local.json`, any secrets, keys, or dumps.
 
 Rules:
+
 - In Phase 1, create `.gitignore`, `.dockerignore`, and `.env.example` before anything else is generated.
 - Before suggesting a commit, check `git status` and warn me about any file that should not be committed.
 - Never add secrets to `.env.example` — placeholders only.
@@ -472,25 +506,32 @@ All kickoff questions are already answered (section 2). Do NOT ask them again. D
 3. **STOP and wait for my approval.**
 
 ### PROJECT_STATUS.md template
+
 ```md
 # PROJECT_STATUS
 
 ## Current phase
+
 Phase X — <name> — <not started | planning | awaiting approval | implementing | done>
 
 ## Completed phases
+
 - Phase 1 — Bootstrap ✅ (<date>)
 
 ## Decisions log
+
 - <date> — <decision> — <reason>
 
 ## Open questions
+
 - <question>
 
 ## Next step
+
 <one sentence>
 
 ## Notes for next session (to save context)
+
 - <module names, conventions, gotchas the next session needs>
 ```
 

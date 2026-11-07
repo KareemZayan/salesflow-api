@@ -51,6 +51,18 @@ The rate limiter keys on the client IP. Behind nginx, a cloud load balancer or s
 
 Never set `true` while the API is directly reachable: any client could then spoof `X-Forwarded-For` to dodge the limit.
 
+## Audit logs
+
+Who changed what, and when: [ADR 0014](docs/decisions/0014-audit-logs.md). Audit rows are **not** queued:
+each one is written in the same database transaction as the audited change (`AuditService.record(tx, ...)`),
+so if the audit insert fails the change fails with it, and a rolled-back change leaves no row. That includes
+sign-in: while the audit table is unavailable nobody can log in. The table is append-only (a trigger blocks
+UPDATE and DELETE; only the retention job may delete, see the table below). The trigger is defence in depth
+at application level, not protection against a database administrator. Administrators read the trail with
+`GET /api/v1/audit-logs` (`audit-logs:read`, cursor pagination, filters); the response includes IP address
+and user agent, which no other endpoint exposes. Failed logins are only written to the structured log.
+**Retention (730 days by default) is a legal / contractual decision to confirm before production.**
+
 ## Background jobs
 
 Asynchronous work runs on [BullMQ](https://docs.bullmq.io/) (Redis). Design and guarantees:
@@ -67,6 +79,7 @@ section only says how to use and operate it; the numbers live in code, not here.
 | Alert batch cap per job                                                          | `TASK_ALERT_BATCH_LIMIT` in `src/modules/tasks/tasks.constants.ts`                      |
 | Notification retention                                                           | `NOTIFICATION_RETENTION_DAYS` in `src/modules/notifications/notifications.constants.ts` |
 | Refresh-token clean-up                                                           | `src/modules/auth/auth.constants.ts`                                                    |
+| Audit log retention (permanent delete)                                           | `AUDIT_RETENTION_DAYS` in `src/modules/audit-logs/audit-logs.constants.ts`              |
 
 How it fits together: domain events and schedules create jobs; every job payload carries an
 `organizationId` and nothing personal (ids only), and a worker runs it inside that tenant. Schedules are

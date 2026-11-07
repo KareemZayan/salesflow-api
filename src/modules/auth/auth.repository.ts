@@ -58,6 +58,9 @@ export type NewRefreshTokenData = Pick<
   'organizationId' | 'userId' | 'tokenHash' | 'familyId' | 'expiresAt'
 >;
 
+// A transaction client (or the plain client, when a single statement needs no transaction).
+export type AuthDb = Prisma.TransactionClient;
+
 @Injectable()
 export class AuthRepository {
   constructor(
@@ -82,8 +85,13 @@ export class AuthRepository {
     return user?.passwordHash ?? null;
   }
 
-  async markLogin(userId: string, at: Date): Promise<void> {
-    await this.prisma.user.update({ where: { id: userId }, data: { lastLoginAt: at } });
+  // The transaction of every auth write that must commit together with its audit row.
+  inTransaction<T>(work: (tx: AuthDb) => Promise<T>): Promise<T> {
+    return this.prisma.$transaction(work);
+  }
+
+  async markLogin(userId: string, at: Date, db: AuthDb = this.prisma): Promise<void> {
+    await db.user.update({ where: { id: userId }, data: { lastLoginAt: at } });
   }
 
   findRefreshToken(tokenHash: string): Promise<StoredRefreshTokenRecord | null> {
@@ -93,8 +101,8 @@ export class AuthRepository {
     });
   }
 
-  async createRefreshToken(data: NewRefreshTokenData): Promise<void> {
-    await this.prisma.refreshToken.create({ data });
+  async createRefreshToken(data: NewRefreshTokenData, db: AuthDb = this.prisma): Promise<void> {
+    await db.refreshToken.create({ data });
   }
 
   // Atomic rotation: the conditional updateMany is the lock. Of N concurrent requests presenting
@@ -124,27 +132,29 @@ export class AuthRepository {
     return live > 0;
   }
 
-  async revokeFamily(familyId: string, at: Date): Promise<void> {
-    await this.prisma.refreshToken.updateMany({
+  // Returns how many tokens it revoked (0 = the session was already gone).
+  async revokeFamily(familyId: string, at: Date, db: AuthDb = this.prisma): Promise<number> {
+    const { count } = await db.refreshToken.updateMany({
       where: { familyId, revokedAt: null },
       data: { revokedAt: at },
     });
+    return count;
   }
 
-  // New password + every old session revoked + the caller's fresh session, all or nothing.
+  // New password + every old session revoked + the caller's fresh session. The caller's
+  // transaction makes it all or nothing (together with the audit row).
   async replacePassword(
     userId: string,
     passwordHash: string,
     successor: NewRefreshTokenData,
     now: Date,
+    tx: AuthDb,
   ): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({
-        where: { id: userId },
-        data: { passwordHash, mustChangePassword: false },
-      });
-      await this.sessions.revokeAllForUser(tx, userId, now);
-      await tx.refreshToken.create({ data: successor });
+    await tx.user.update({
+      where: { id: userId },
+      data: { passwordHash, mustChangePassword: false },
     });
+    await this.sessions.revokeAllForUser(tx, userId, now);
+    await tx.refreshToken.create({ data: successor });
   }
 }

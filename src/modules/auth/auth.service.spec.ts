@@ -3,6 +3,7 @@ import { HttpException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ERROR_CODES } from '../../common/constants/error-codes';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { AuditService } from '../audit-logs/audit.service';
 import { AuthRepository, StoredRefreshTokenRecord } from './auth.repository';
 import { AuthService } from './auth.service';
 import { PasswordService } from './password.service';
@@ -11,7 +12,10 @@ import { TokenService } from './token.service';
 const NOW = new Date('2026-06-01T12:00:00Z');
 const GRACE_MS = 10_000;
 
+const TX = { tx: true };
+const audit = { record: vi.fn() };
 const repository = {
+  inTransaction: vi.fn(),
   findLoginCandidate: vi.fn(),
   findAuthContext: vi.fn(),
   findPasswordHash: vi.fn(),
@@ -38,7 +42,12 @@ const tokens = new TokenService(
     }),
   } as unknown as ConfigService,
 );
-const service = new AuthService(repository as unknown as AuthRepository, passwords, tokens);
+const service = new AuthService(
+  repository as unknown as AuthRepository,
+  passwords,
+  tokens,
+  audit as unknown as AuditService,
+);
 
 const stored = (overrides: Partial<StoredRefreshTokenRecord> = {}): StoredRefreshTokenRecord => ({
   id: 'rt-1',
@@ -80,6 +89,8 @@ describe('AuthService', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW);
     Object.values(repository).forEach((fn) => fn.mockReset());
+    audit.record.mockReset();
+    repository.inTransaction.mockImplementation((work: (tx: unknown) => unknown) => work(TX));
   });
 
   afterEach(() => vi.useRealTimers());
@@ -111,7 +122,33 @@ describe('AuthService', () => {
       expect(saved).toMatchObject({ userId: 'user-1', organizationId: 'org-1' });
       expect(saved.familyId).toEqual(expect.any(String));
       expect(saved.tokenHash).toBe(tokens.hashRefreshToken(result.refreshToken));
-      expect(repository.markLogin).toHaveBeenCalledWith('user-1', NOW);
+      expect(repository.markLogin).toHaveBeenCalledWith('user-1', NOW, TX);
+    });
+
+    it('audits the login in the same transaction as the session, from the loaded user', async () => {
+      repository.findLoginCandidate.mockResolvedValue(candidate());
+      // Whatever else the request carries, the organization is the one stored on the user.
+      await service.login({ ...credentials, organizationId: 'org-from-request' } as never);
+      expect(repository.createRefreshToken).toHaveBeenCalledWith(expect.anything(), TX);
+      expect(audit.record).toHaveBeenCalledWith(
+        TX,
+        { event: 'auth.login', entityId: 'user-1' },
+        { actorId: 'user-1', organizationId: 'org-1' },
+      );
+    });
+
+    it('hands out no tokens when the audit insert fails', async () => {
+      repository.findLoginCandidate.mockResolvedValue(candidate());
+      audit.record.mockRejectedValue(new Error('audit down'));
+      await expect(service.login(credentials)).rejects.toThrow('audit down');
+    });
+
+    it('writes no audit row for a failed login (structured log only)', async () => {
+      repository.findLoginCandidate.mockResolvedValue(candidate());
+      await failure(service.login({ ...credentials, password: 'wrong-password-here' }));
+      repository.findLoginCandidate.mockResolvedValue(null);
+      await failure(service.login({ ...credentials, email: 'nobody@example.com' }));
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('runs a dummy hash check for an unknown email and answers like a wrong password', async () => {
@@ -242,8 +279,21 @@ describe('AuthService', () => {
   describe('logout', () => {
     it('revokes the whole family of a known token', async () => {
       repository.findRefreshToken.mockResolvedValue(stored());
+      repository.revokeFamily.mockResolvedValue(1);
       await service.logout('t');
-      expect(repository.revokeFamily).toHaveBeenCalledWith('family-1', NOW);
+      expect(repository.revokeFamily).toHaveBeenCalledWith('family-1', NOW, TX);
+      expect(audit.record).toHaveBeenCalledWith(
+        TX,
+        { event: 'auth.logout', entityId: 'user-1' },
+        { actorId: 'user-1', organizationId: 'org-1' },
+      );
+    });
+
+    it('audits nothing when the session was already gone', async () => {
+      repository.findRefreshToken.mockResolvedValue(stored());
+      repository.revokeFamily.mockResolvedValue(0);
+      await service.logout('t');
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('is idempotent for an unknown token', async () => {
@@ -292,6 +342,12 @@ describe('AuthService', () => {
       expect(successor.tokenHash).toBe(tokens.hashRefreshToken(result.refreshToken));
       expect(at).toEqual(NOW);
       expect(result.mustChangePassword).toBe(false);
+      // The event alone, in the same transaction as the new hash: no password, no hash.
+      expect(audit.record).toHaveBeenCalledWith(TX, {
+        event: 'auth.password_changed',
+        entityId: 'user-1',
+      });
+      expect(JSON.stringify(audit.record.mock.calls)).not.toContain(dto.newPassword);
     });
   });
 

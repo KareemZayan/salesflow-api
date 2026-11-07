@@ -6,6 +6,7 @@ import { OwnershipScopeService } from '../../common/visibility/ownership-scope.s
 import { VisibilityScope } from '../../common/visibility/visibility.types';
 import { DealStatus } from '../../generated/prisma/client';
 import { LockRequest } from '../../infrastructure/prisma/advisory-lock';
+import { AuditService } from '../audit-logs/audit.service';
 import { CompaniesService } from '../companies/companies.service';
 import { ContactsService } from '../contacts/contacts.service';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -32,6 +33,7 @@ const service = new DealsService(
   {} as ContactsService,
   {} as OrganizationsService,
   { emitAsync } as unknown as EventEmitter2,
+  { record: vi.fn() } as unknown as AuditService,
 );
 
 const actor: AuthenticatedUser = {

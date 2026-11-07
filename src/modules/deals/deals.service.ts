@@ -15,6 +15,7 @@ import { OwnershipScopeService } from '../../common/visibility/ownership-scope.s
 import { VisibilityScope } from '../../common/visibility/visibility.types';
 import { DealStatus } from '../../generated/prisma/client';
 import { LockRequest } from '../../infrastructure/prisma/advisory-lock';
+import { AuditService } from '../audit-logs/audit.service';
 import { CompaniesService } from '../companies/companies.service';
 import { ContactsService } from '../contacts/contacts.service';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -64,6 +65,7 @@ export class DealsService {
     private readonly contacts: ContactsService,
     private readonly organizations: OrganizationsService,
     private readonly events: EventEmitter2,
+    private readonly audit: AuditService,
   ) {}
 
   async list(
@@ -207,19 +209,32 @@ export class DealsService {
     if (newCompanyId) changes.companyId = newCompanyId;
     if (newContactId) changes.contactId = newContactId;
 
+    // An amount or currency edit runs in a transaction so its audit row commits with it; the "before"
+    // is read inside it, right before the write. Only a REAL change is recorded (the diff drops equal
+    // values). Two edits of the SAME deal at the same instant can still both record the value they
+    // read (ADR 0014); the stored amount is always the last write.
+    const touchesMoney = dto.amount !== undefined || dto.currency !== undefined;
     const updated =
-      newCompanyId || newContactId
+      newCompanyId || newContactId || touchesMoney
         ? await this.repository.inLocks(
             sharedLocks(undefined, newCompanyId, newContactId),
             async (tx) => {
               await this.assertPartiesLinkable(tx, scope, newCompanyId, newContactId);
-              return this.repository.updateOpenVisible(scope, id, changes, tx);
+              const before = touchesMoney ? await this.repository.findVisible(scope, id, tx) : null;
+              const result = await this.repository.updateOpenVisible(scope, id, changes, tx);
+              if (result && before) {
+                await this.audit.record(tx, {
+                  event: 'deal.money_changed',
+                  entityId: id,
+                  before: moneyOf(before),
+                  after: moneyOf(result),
+                });
+              }
+              return result;
             },
           )
         : await this.repository.updateOpenVisible(scope, id, changes);
     if (!updated) throw await this.whyNotEditable(scope, id);
-
-    if (current) this.logMoneyChange(actor, current, updated);
     return toDealResponse(updated);
   }
 
@@ -328,25 +343,10 @@ export class DealsService {
       ? new DealClosedException()
       : resourceNotFound('Deal');
   }
-
-  // Amount and currency changes are not audited yet (Phase 13 adds the audit log): until then a
-  // structured log keeps who changed what, from which value to which. Ids and values only.
-  private logMoneyChange(actor: AuthenticatedUser, before: DealRecord, after: DealRecord): void {
-    const amountChanged = !before.amount.equals(after.amount);
-    const currencyChanged = before.currency !== after.currency;
-    if (!amountChanged && !currencyChanged) return;
-    this.logger.log({
-      event: 'deal.money_changed',
-      organizationId: actor.organizationId,
-      dealId: after.id,
-      actorId: actor.userId,
-      ...(amountChanged && {
-        amount: { from: before.amount.toFixed(2), to: after.amount.toFixed(2) },
-      }),
-      ...(currencyChanged && { currency: { from: before.currency, to: after.currency } }),
-    });
-  }
 }
+
+// The audited money of a deal: the amount as a string (never a number or a Decimal) and its currency.
+const moneyOf = ({ amount, currency }: DealRecord) => ({ amount: amount.toFixed(2), currency });
 
 // Shared locks in the order pipeline -> company -> contact; absent ids are skipped.
 function sharedLocks(

@@ -5,6 +5,7 @@ import { OwnershipScopeService } from '../../common/visibility/ownership-scope.s
 import { VisibilityScope } from '../../common/visibility/visibility.types';
 import { TaskPriority, TaskStatus } from '../../generated/prisma/client';
 import { LockRequest } from '../../infrastructure/prisma/advisory-lock';
+import { AuditService } from '../audit-logs/audit.service';
 import { CompaniesService } from '../companies/companies.service';
 import { ContactsService } from '../contacts/contacts.service';
 import { DealsService } from '../deals/deals.service';
@@ -29,6 +30,7 @@ const deals = { assertLinkable: vi.fn() };
 const contacts = { assertLinkable: vi.fn() };
 const companies = { assertLinkable: vi.fn() };
 const emitAsync = vi.fn();
+const audit = { record: vi.fn() };
 const service = new TasksService(
   repository as unknown as TasksRepository,
   ownership as unknown as OwnershipScopeService,
@@ -37,6 +39,7 @@ const service = new TasksService(
   contacts as unknown as ContactsService,
   companies as unknown as CompaniesService,
   { emitAsync } as unknown as EventEmitter2,
+  audit as unknown as AuditService,
 );
 
 const actor: AuthenticatedUser = {
@@ -89,7 +92,7 @@ beforeEach(() => {
   repository.findVisible.mockResolvedValue(task());
   repository.updateOpenVisible.mockResolvedValue(task());
   repository.transitionStatus.mockResolvedValue(task({ status: TaskStatus.COMPLETED }));
-  repository.deleteVisible.mockResolvedValue(true);
+  repository.deleteVisible.mockResolvedValue({ assigneeId: 'me' });
   emitAsync.mockResolvedValue([]);
 });
 
@@ -248,7 +251,6 @@ describe('TasksService.update', () => {
     it.each([
       ['priority', { priority: TaskPriority.URGENT }],
       ['title', { title: 'New title' }],
-      ['assignee', { assigneeId: 'other' }],
       ['due date', { dueDate: FUTURE }],
       ['the same contact and company', { contactId: 'c1', companyId: 'co1' }],
       ['unlinking', { contactId: null, companyId: null }],
@@ -270,6 +272,17 @@ describe('TasksService.update', () => {
         );
       },
     );
+
+    it('a reassignment opens a transaction for its audit row but takes no lock', async () => {
+      repository.findVisible.mockResolvedValue(linked);
+      ownership.resolveAssignableOwner.mockResolvedValue('other');
+      await service.update(actor, 't1', { assigneeId: 'other' });
+      expect(locks).toEqual([]);
+      expect(repository.inLocks).toHaveBeenCalledTimes(1);
+      expect(companies.assertLinkable).not.toHaveBeenCalled();
+      expect(contacts.assertLinkable).not.toHaveBeenCalled();
+      expect(repository.updateOpenVisible).toHaveBeenCalledWith(scope, 't1', expect.anything(), tx);
+    });
 
     it('changing the status takes none either', async () => {
       repository.findVisible.mockResolvedValue(linked);
@@ -306,12 +319,44 @@ describe('TasksService.update', () => {
         scope,
         't1',
         expect.objectContaining({ assigneeId: 'other' }),
-        undefined,
+        tx,
       );
       expect(emitAsync).toHaveBeenCalledWith(
         TASK_ASSIGNED_EVENT,
         expect.objectContaining({ taskId: 't1', assigneeId: 'other', previousAssigneeId: 'me' }),
       );
+    });
+
+    it('audits a real reassignment in the same transaction, assigneeId only', async () => {
+      ownership.resolveAssignableOwner.mockResolvedValue('other');
+      repository.updateOpenVisible.mockResolvedValue(task({ assigneeId: 'other' }));
+      await service.update(actor, 't1', { assigneeId: 'other', title: 'Renamed' });
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(tx, {
+        event: 'task.reassigned',
+        entityId: 't1',
+        before: { assigneeId: 'me' },
+        after: { assigneeId: 'other' },
+      });
+    });
+
+    it('audits nothing for the same assignee, an ordinary edit, or a lost race', async () => {
+      await service.update(actor, 't1', { assigneeId: 'me', title: 'x' });
+      await service.update(actor, 't1', { title: 'Renamed' });
+      ownership.resolveAssignableOwner.mockResolvedValue('other');
+      repository.updateOpenVisible.mockResolvedValue(null);
+      repository.findVisible.mockResolvedValueOnce(task()).mockResolvedValueOnce(null);
+      await failure(service.update(actor, 't1', { assigneeId: 'other' }));
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('fails the update when the audit insert fails (the error reaches the transaction)', async () => {
+      ownership.resolveAssignableOwner.mockResolvedValue('other');
+      audit.record.mockRejectedValue(new Error('audit down'));
+      await expect(service.update(actor, 't1', { assigneeId: 'other' })).rejects.toThrow(
+        'audit down',
+      );
+      expect(emitAsync).not.toHaveBeenCalled();
     });
 
     it('naming the current assignee again changes nothing and publishes nothing', async () => {
@@ -509,40 +554,42 @@ describe('TasksService.changeStatus', () => {
 describe('TasksService.delete', () => {
   it('a non-admin deletes only OPEN / IN_PROGRESS tasks (the filter is in the delete itself)', async () => {
     await service.delete(actor, 't1');
-    expect(repository.deleteVisible).toHaveBeenCalledWith(scope, 't1', true);
+    expect(repository.deleteVisible).toHaveBeenCalledWith(scope, 't1', true, tx);
   });
 
   it('an admin may delete a task of any status', async () => {
     await service.delete(admin, 't1');
-    expect(repository.deleteVisible).toHaveBeenCalledWith(scope, 't1', false);
+    expect(repository.deleteVisible).toHaveBeenCalledWith(scope, 't1', false, tx);
   });
 
-  it('logs who deleted which task, with ids only', async () => {
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  it('audits the delete in the same transaction, with the assignee only (no title or text)', async () => {
+    repository.deleteVisible.mockResolvedValue({ assigneeId: 'colleague' });
     await service.delete(actor, 't1');
-    expect(log).toHaveBeenCalledWith({
+    expect(audit.record).toHaveBeenCalledWith(tx, {
       event: 'task.deleted',
-      organizationId: 'org',
-      taskId: 't1',
-      actorId: 'me',
+      entityId: 't1',
+      before: { assigneeId: 'colleague' },
     });
-    log.mockRestore();
+    expect(JSON.stringify(audit.record.mock.calls)).not.toContain('Call back');
   });
 
-  it('a visible closed task a non-admin tries to delete is 403 TASK_DELETE_RESTRICTED, not logged', async () => {
-    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    repository.deleteVisible.mockResolvedValue(false);
+  it('fails the delete when the audit insert fails (the error reaches the transaction)', async () => {
+    audit.record.mockRejectedValue(new Error('audit down'));
+    await expect(service.delete(actor, 't1')).rejects.toThrow('audit down');
+  });
+
+  it('a visible closed task a non-admin tries to delete is 403 TASK_DELETE_RESTRICTED, not audited', async () => {
+    repository.deleteVisible.mockResolvedValue(null);
     repository.findVisible.mockResolvedValue(task({ status: TaskStatus.COMPLETED }));
     expect(await failure(service.delete(actor, 't1'))).toEqual({
       status: 403,
       code: 'TASK_DELETE_RESTRICTED',
     });
-    expect(log).not.toHaveBeenCalled();
-    log.mockRestore();
+    expect(audit.record).not.toHaveBeenCalled();
   });
 
   it('a task the caller cannot see is 404 (never 403), closed or not', async () => {
-    repository.deleteVisible.mockResolvedValue(false);
+    repository.deleteVisible.mockResolvedValue(null);
     repository.findVisible.mockResolvedValue(null);
     expect(await failure(service.delete(actor, 't1'))).toEqual({
       status: 404,
@@ -551,7 +598,7 @@ describe('TasksService.delete', () => {
   });
 
   it('an admin deleting a missing task gets 404', async () => {
-    repository.deleteVisible.mockResolvedValue(false);
+    repository.deleteVisible.mockResolvedValue(null);
     expect((await failure(service.delete(admin, 't1'))).status).toBe(404);
     expect(repository.findVisible).not.toHaveBeenCalled();
   });

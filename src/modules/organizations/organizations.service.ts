@@ -1,15 +1,19 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { ERROR_CODES } from '../../common/constants/error-codes';
 import { DomainException } from '../../common/exceptions/domain.exception';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { AuditService } from '../audit-logs/audit.service';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { OrganizationRecord, OrganizationsRepository } from './organizations.repository';
 
+const auditedOf = ({ name, defaultCurrency }: OrganizationRecord) => ({ name, defaultCurrency });
+
 @Injectable()
 export class OrganizationsService {
-  private readonly logger = new Logger(OrganizationsService.name);
-
-  constructor(private readonly repository: OrganizationsRepository) {}
+  constructor(
+    private readonly repository: OrganizationsRepository,
+    private readonly audit: AuditService,
+  ) {}
 
   async getCurrent(actor: AuthenticatedUser): Promise<OrganizationRecord> {
     return this.orFail(await this.repository.findById(actor.organizationId));
@@ -26,19 +30,22 @@ export class OrganizationsService {
         HttpStatus.BAD_REQUEST,
       );
     }
-    const updated = this.orFail(
-      await this.repository.update(actor.organizationId, { name, defaultCurrency }),
+    const id = actor.organizationId;
+    return this.orFail(
+      await this.repository.withOrgLock(id, async (tx) => {
+        const before = await this.repository.findById(id, tx);
+        const after = await this.repository.update(id, { name, defaultCurrency }, tx);
+        if (before && after) {
+          await this.audit.record(tx, {
+            event: 'organization.updated',
+            entityId: id,
+            before: auditedOf(before),
+            after: auditedOf(after),
+          });
+        }
+        return after;
+      }),
     );
-    this.logger.log({
-      event: 'organization.updated',
-      organizationId: actor.organizationId,
-      actorId: actor.userId,
-      fields: [
-        name !== undefined && 'name',
-        defaultCurrency !== undefined && 'defaultCurrency',
-      ].filter(Boolean),
-    });
-    return updated;
   }
 
   private orFail(record: OrganizationRecord | null): OrganizationRecord {

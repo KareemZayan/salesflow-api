@@ -11,6 +11,9 @@ export const QUEUE_NAMES = {
   TASK_OVERDUE: 'task-overdue',
   REFRESH_TOKEN_CLEANUP: 'refresh-token-cleanup',
   NOTIFICATION_RETENTION: 'notification-retention',
+  // The ONLY job that touches audit rows: the scheduled retention delete. Audit rows themselves are
+  // never written through a queue (ADR 0014).
+  AUDIT_RETENTION: 'audit-retention',
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];

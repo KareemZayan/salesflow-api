@@ -26,7 +26,8 @@ export interface OrganizationSweep {
 //  - Overdue is a status report, not a deadline: every 15 minutes is plenty and 15x fewer queries.
 //  - Both look for organizations with pending work first (one grouped, index-served query), so a
 //    quiet system costs two cheap queries and zero jobs per tick.
-//  - Housekeeping is daily at 03:15 UTC for every active organization (a few jobs per day).
+//  - Housekeeping is daily (03:15 tokens, 03:30 notifications, 03:45 audit logs, UTC) for every
+//    active organization (a few jobs per day).
 export function buildOrganizationSweeps(work: OrganizationWorkRepository): OrganizationSweep[] {
   return [
     {
@@ -55,6 +56,13 @@ export function buildOrganizationSweeps(work: OrganizationWorkRepository): Organ
       repeat: { pattern: '30 3 * * *' },
       bucketMs: DAY_MS,
       targetQueue: QUEUE_NAMES.NOTIFICATION_RETENTION,
+      organizationIds: (_now, after, limit) => work.allActive(after, limit),
+    },
+    {
+      name: 'audit-retention',
+      repeat: { pattern: '45 3 * * *' },
+      bucketMs: DAY_MS,
+      targetQueue: QUEUE_NAMES.AUDIT_RETENTION,
       organizationIds: (_now, after, limit) => work.allActive(after, limit),
     },
   ];

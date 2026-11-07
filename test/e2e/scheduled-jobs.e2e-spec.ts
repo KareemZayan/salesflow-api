@@ -102,6 +102,7 @@ describe('Scheduled jobs (e2e, real Redis)', () => {
           ['task-overdue', 15 * MINUTE],
           ['refresh-token-cleanup', '15 3 * * *'],
           ['notification-retention', '30 3 * * *'],
+          ['audit-retention', '45 3 * * *'],
         ].sort(),
       );
     });

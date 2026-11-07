@@ -1,10 +1,16 @@
 import { HttpException, Logger } from '@nestjs/common';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { AuditService } from '../audit-logs/audit.service';
 import { OrganizationRecord, OrganizationsRepository } from './organizations.repository';
 import { OrganizationsService } from './organizations.service';
 
-const repository = { findById: vi.fn(), update: vi.fn() };
-const service = new OrganizationsService(repository as unknown as OrganizationsRepository);
+const TX = { tx: true };
+const repository = { findById: vi.fn(), update: vi.fn(), withOrgLock: vi.fn() };
+const audit = { record: vi.fn() };
+const service = new OrganizationsService(
+  repository as unknown as OrganizationsRepository,
+  audit as unknown as AuditService,
+);
 
 const actor: AuthenticatedUser = {
   userId: 'user-1',
@@ -38,6 +44,9 @@ const failure = async (promise: Promise<unknown>): Promise<[number, string]> => 
 beforeEach(() => {
   vi.resetAllMocks();
   vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  repository.withOrgLock.mockImplementation((_id: string, work: (tx: unknown) => unknown) =>
+    work(TX),
+  );
 });
 
 describe('OrganizationsService', () => {
@@ -53,12 +62,33 @@ describe('OrganizationsService', () => {
   });
 
   it('updates the caller organization with only the provided fields', async () => {
+    repository.findById.mockResolvedValue(record());
     repository.update.mockResolvedValue(record({ name: 'New' }));
     await service.updateCurrent(actor, { name: 'New' });
-    expect(repository.update).toHaveBeenCalledWith('org-1', {
-      name: 'New',
-      defaultCurrency: undefined,
+    expect(repository.update).toHaveBeenCalledWith(
+      'org-1',
+      { name: 'New', defaultCurrency: undefined },
+      TX,
+    );
+  });
+
+  it('audits the change in the same transaction, with the old and new values', async () => {
+    repository.findById.mockResolvedValue(record());
+    repository.update.mockResolvedValue(record({ name: 'New' }));
+    await service.updateCurrent(actor, { name: 'New' });
+    expect(audit.record).toHaveBeenCalledWith(TX, {
+      event: 'organization.updated',
+      entityId: 'org-1',
+      before: { name: 'Acme', defaultCurrency: 'USD' },
+      after: { name: 'New', defaultCurrency: 'USD' },
     });
+  });
+
+  it('records nothing when the organization is gone', async () => {
+    repository.findById.mockResolvedValue(null);
+    repository.update.mockResolvedValue(null);
+    await failure(service.updateCurrent(actor, { name: 'X' }));
+    expect(audit.record).not.toHaveBeenCalled();
   });
 
   it('rejects an empty update with 400', async () => {

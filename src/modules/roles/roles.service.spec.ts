@@ -1,6 +1,7 @@
 import { HttpException, Logger } from '@nestjs/common';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { Prisma } from '../../generated/prisma/client';
+import { AuditService } from '../audit-logs/audit.service';
 import { RoleRecord, RolesRepository } from './roles.repository';
 import { RolesService } from './roles.service';
 
@@ -18,7 +19,11 @@ const repository = {
   countUsers: vi.fn(),
   delete: vi.fn(),
 };
-const service = new RolesService(repository as unknown as RolesRepository);
+const audit = { record: vi.fn() };
+const service = new RolesService(
+  repository as unknown as RolesRepository,
+  audit as unknown as AuditService,
+);
 
 const actorOf = (role = 'ADMIN', permissions: string[] = []): AuthenticatedUser => ({
   userId: 'actor',
@@ -215,5 +220,62 @@ describe('RolesService.list', () => {
     });
     const page = await service.list({ page: 1, limit: 20, sortOrder: 'asc' });
     expect(page.data[0]).toMatchObject({ permissionKeys: ['a:a', 'z:z'], userCount: 3 });
+  });
+});
+
+describe('RolesService audit', () => {
+  it('records role.created with the name and sorted permission keys, in the same transaction', async () => {
+    catalogue('users:update', 'leads:read');
+    repository.create.mockResolvedValue(roleOf({ keys: ['users:update', 'leads:read'] }));
+    await service.create(actorOf(), {
+      name: 'Support',
+      permissionKeys: ['users:update', 'leads:read'],
+    });
+    expect(audit.record).toHaveBeenCalledWith(TX, {
+      event: 'role.created',
+      entityId: 'role-1',
+      after: { name: 'Support', permissionKeys: ['leads:read', 'users:update'] },
+    });
+  });
+
+  it('records a rename and a permission change as two events, each with its own field', async () => {
+    repository.findById
+      .mockResolvedValueOnce(roleOf({ keys: ['leads:read'] }))
+      .mockResolvedValueOnce(roleOf({ name: 'Helpdesk', keys: ['leads:read', 'deals:read'] }));
+    catalogue('leads:read', 'deals:read');
+    await service.update(actorOf(), 'role-1', {
+      name: 'Helpdesk',
+      permissionKeys: ['leads:read', 'deals:read'],
+    });
+    expect(audit.record).toHaveBeenCalledWith(TX, {
+      event: 'role.updated',
+      entityId: 'role-1',
+      before: { name: 'Support' },
+      after: { name: 'Helpdesk' },
+    });
+    expect(audit.record).toHaveBeenCalledWith(TX, {
+      event: 'role.permissions_changed',
+      entityId: 'role-1',
+      before: { permissionKeys: ['leads:read'] },
+      after: { permissionKeys: ['deals:read', 'leads:read'] },
+    });
+  });
+
+  it('records role.deleted with what the role was', async () => {
+    repository.findById.mockResolvedValue(roleOf());
+    repository.countUsers.mockResolvedValue(0);
+    await service.delete(actorOf(), 'role-1');
+    expect(audit.record).toHaveBeenCalledWith(TX, {
+      event: 'role.deleted',
+      entityId: 'role-1',
+      before: { name: 'Support', permissionKeys: ['leads:read'] },
+    });
+  });
+
+  it('fails the delete when the audit insert fails (the error reaches the transaction)', async () => {
+    repository.findById.mockResolvedValue(roleOf());
+    repository.countUsers.mockResolvedValue(0);
+    audit.record.mockRejectedValue(new Error('audit down'));
+    await expect(service.delete(actorOf(), 'role-1')).rejects.toThrow('audit down');
   });
 });

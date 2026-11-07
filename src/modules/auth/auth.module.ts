@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { APP_CONFIG_KEY, AppConfig } from '../../config/app.config';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { JWT_ALGORITHM, JWT_AUDIENCE, JWT_ISSUER } from './auth.constants';
 import { AuthController } from './auth.controller';
 import { AuthRepository } from './auth.repository';
@@ -16,6 +17,7 @@ import { TokenService } from './token.service';
 
 @Module({
   imports: [
+    AuditLogsModule,
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],

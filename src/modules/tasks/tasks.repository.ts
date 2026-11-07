@@ -246,14 +246,19 @@ export class TasksRepository {
   }
 
   // Hard delete (Task is not soft-deleted). With `openOnly`, a closed task matches nothing, in the
-  // same statement. `false` = nothing deleted.
-  async deleteVisible(scope: VisibilityScope, id: string, openOnly: boolean): Promise<boolean> {
-    const deleted = await nullIfNotFound(
-      this.prisma.task.delete({
+  // same statement. `null` = nothing deleted; otherwise who the task was assigned to (the audit row
+  // of the delete stores that and nothing else).
+  deleteVisible(
+    scope: VisibilityScope,
+    id: string,
+    openOnly: boolean,
+    db: TaskDb = this.prisma,
+  ): Promise<{ assigneeId: string } | null> {
+    return nullIfNotFound(
+      db.task.delete({
         where: { id, ...(openOnly && stillOpen), ...visibility(scope) },
-        select: { id: true },
+        select: { assigneeId: true },
       }),
     );
-    return deleted !== null;
   }
 }

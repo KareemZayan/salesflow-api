@@ -268,14 +268,16 @@ erDiagram
         uuid id PK
         uuid organizationId FK
         uuid actorId FK "nullable = system"
-        AuditAction action
+        AuditAction action "coarse category"
+        string event "stable code from AUDIT_EVENTS, plain string (no migration for a new event)"
         string entityType
         string entityId "no FK, must outlive the entity"
-        json before
-        json after
+        json before "changed allowlisted fields only"
+        json after "changed allowlisted fields only"
         string ipAddress
         string userAgent
-        datetime createdAt
+        string requestId "nullable"
+        datetime createdAt "append-only: UPDATE/DELETE blocked by trigger (ADR 0014)"
     }
 ```
 
@@ -419,6 +421,7 @@ Rule: tenant-scoped query patterns **lead with `organizationId`**. Soft-deleted 
 | `Notification`     | unique `(organizationId, dedupeKey)`                                                             | A retried or duplicated queue job cannot notify twice (Phase 12a) |
 | `AuditLog`         | `(organizationId, entityType, entityId, createdAt desc)`                                         | History of one record                                             |
 | `AuditLog`         | `(organizationId, actorId, createdAt desc)`                                                      | "What did this user do"                                           |
+| `AuditLog`         | `(organizationId, createdAt desc)`                                                               | The unfiltered list, date ranges and the retention job (13b)      |
 
 Pagination choice: **cursor** for `Activity` and `AuditLog` (append-heavy, large); **offset** for all other lists.
 

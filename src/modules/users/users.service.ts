@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { ERROR_CODES } from '../../common/constants/error-codes';
 import { ADMIN_ROLE_NAME } from '../../common/constants/roles';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
@@ -6,6 +6,8 @@ import { DomainException } from '../../common/exceptions/domain.exception';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { assertMayGrant } from '../../common/utils/permission-escalation.util';
 import { isUniqueViolation } from '../../common/utils/prisma-error.util';
+import { AuditSnapshot } from '../audit-logs/audit-fields';
+import { AuditService } from '../audit-logs/audit.service';
 import { PasswordService } from '../auth/password.service';
 import { SessionRevoker } from '../auth/session-revoker.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -15,23 +17,21 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { MAX_MANAGER_DEPTH } from './users.constants';
 import { RoleRef, UserChanges, UserRecord, UsersRepository, UsersTx } from './users.repository';
 
-// Structured log events stand in for the audit trail until Phase 13. They carry ids only, never
-// credentials.
-type UserEvent =
-  | 'user.created'
-  | 'user.deactivated'
-  | 'user.reactivated'
-  | 'user.role_changed'
-  | 'user.password_reset';
+// The audited fields of a user (audit-fields.ts is the allowlist; the diff keeps what changed).
+const profileOf = ({ email, firstName, lastName, managerId }: UserRecord): AuditSnapshot => ({
+  email,
+  firstName,
+  lastName,
+  managerId,
+});
 
 @Injectable()
 export class UsersService {
-  private readonly logger = new Logger(UsersService.name);
-
   constructor(
     private readonly repository: UsersRepository,
     private readonly passwords: PasswordService,
     private readonly sessions: SessionRevoker,
+    private readonly audit: AuditService,
   ) {}
 
   list(query: ListUsersQueryDto): Promise<PaginatedResponseDto<UserRecord>> {
@@ -53,7 +53,7 @@ export class UsersService {
         const role = await this.requireRole(dto.roleId, tx);
         this.assertMayAssignRole(actor, role);
         if (dto.managerId) await this.assertManagerAssignable(dto.managerId, undefined, tx);
-        return this.repository.create(
+        const created = await this.repository.create(
           {
             organizationId: actor.organizationId,
             email: dto.email,
@@ -65,14 +65,18 @@ export class UsersService {
           },
           tx,
         );
+        await this.audit.record(tx, {
+          event: 'user.created',
+          entityId: created.id,
+          after: { ...profileOf(created), roleId: role.id, isActive: created.isActive },
+        });
+        return created;
       }),
     );
-    this.record('user.created', actor, user.id);
     return user;
   }
 
   async update(actor: AuthenticatedUser, id: string, dto: UpdateUserDto): Promise<UserRecord> {
-    let roleChange: { from: string; to: string } | undefined;
     const user = await this.guardEmail(() =>
       this.repository.withOrgLock(actor.organizationId, async (tx) => {
         const target = await this.requireUser(id, tx);
@@ -97,7 +101,6 @@ export class UsersService {
             await this.assertAdminCanBeRemoved(target, tx);
           }
           changes.roleId = role.id;
-          roleChange = { from: target.role.id, to: role.id };
         }
 
         if (dto.managerId !== undefined && dto.managerId !== target.managerId) {
@@ -105,10 +108,22 @@ export class UsersService {
           changes.managerId = dto.managerId;
         }
 
-        return this.repository.update(id, changes, tx);
+        const updated = await this.repository.update(id, changes, tx);
+        await this.audit.record(tx, {
+          event: 'user.updated',
+          entityId: id,
+          before: profileOf(target),
+          after: profileOf(updated),
+        });
+        await this.audit.record(tx, {
+          event: 'user.role_changed',
+          entityId: id,
+          before: { roleId: target.role.id },
+          after: { roleId: updated.role.id },
+        });
+        return updated;
       }),
     );
-    if (roleChange) this.record('user.role_changed', actor, id, roleChange);
     return user;
   }
 
@@ -119,55 +134,59 @@ export class UsersService {
         'You cannot deactivate your own account',
       );
     }
-    const { user, changed } = await this.repository.withOrgLock(
-      actor.organizationId,
-      async (tx) => {
-        const target = await this.requireUser(id, tx);
-        this.assertAdminRoleAllowed(actor, target.role.name);
-        if (!target.isActive) return { user: target, changed: false };
+    const { user } = await this.repository.withOrgLock(actor.organizationId, async (tx) => {
+      const target = await this.requireUser(id, tx);
+      this.assertAdminRoleAllowed(actor, target.role.name);
+      if (!target.isActive) return { user: target };
 
-        if (target.role.name === ADMIN_ROLE_NAME) await this.assertAdminCanBeRemoved(target, tx);
-        if ((await this.repository.countActiveReports(id, tx)) > 0) {
-          throw new DomainException(
-            ERROR_CODES.USER_HAS_ACTIVE_REPORTS,
-            "Reassign this user's active direct reports before deactivating them",
-            HttpStatus.CONFLICT,
-          );
-        }
-        const updated = await this.repository.update(id, { isActive: false }, tx);
-        // Same transaction: a deactivated user never keeps a working refresh token.
-        await this.sessions.revokeAllForUser(tx, id, new Date());
-        return { user: updated, changed: true };
-      },
-    );
-    if (changed) this.record('user.deactivated', actor, id);
+      if (target.role.name === ADMIN_ROLE_NAME) await this.assertAdminCanBeRemoved(target, tx);
+      if ((await this.repository.countActiveReports(id, tx)) > 0) {
+        throw new DomainException(
+          ERROR_CODES.USER_HAS_ACTIVE_REPORTS,
+          "Reassign this user's active direct reports before deactivating them",
+          HttpStatus.CONFLICT,
+        );
+      }
+      const updated = await this.repository.update(id, { isActive: false }, tx);
+      // Same transaction: a deactivated user never keeps a working refresh token.
+      await this.sessions.revokeAllForUser(tx, id, new Date());
+      await this.audit.record(tx, {
+        event: 'user.deactivated',
+        entityId: id,
+        before: { isActive: true },
+        after: { isActive: false },
+      });
+      return { user: updated };
+    });
     return user;
   }
 
   async reactivate(actor: AuthenticatedUser, id: string): Promise<UserRecord> {
-    const { user, changed } = await this.repository.withOrgLock(
-      actor.organizationId,
-      async (tx) => {
-        const target = await this.requireUser(id, tx);
-        this.assertAdminRoleAllowed(actor, target.role.name);
-        if (target.isActive) return { user: target, changed: false };
+    return this.repository.withOrgLock(actor.organizationId, async (tx) => {
+      const target = await this.requireUser(id, tx);
+      this.assertAdminRoleAllowed(actor, target.role.name);
+      if (target.isActive) return target;
 
-        // An active user must not sit under an inactive manager. The admin fixes the manager first
-        // (PATCH managerId), then reactivates.
-        if (target.managerId) {
-          const manager = await this.repository.findById(target.managerId, tx);
-          if (!manager?.isActive) {
-            throw this.invalidManager(
-              'The manager of this user is inactive; assign an active manager (or none) first',
-              HttpStatus.CONFLICT,
-            );
-          }
+      // An active user must not sit under an inactive manager. The admin fixes the manager first
+      // (PATCH managerId), then reactivates.
+      if (target.managerId) {
+        const manager = await this.repository.findById(target.managerId, tx);
+        if (!manager?.isActive) {
+          throw this.invalidManager(
+            'The manager of this user is inactive; assign an active manager (or none) first',
+            HttpStatus.CONFLICT,
+          );
         }
-        return { user: await this.repository.update(id, { isActive: true }, tx), changed: true };
-      },
-    );
-    if (changed) this.record('user.reactivated', actor, id);
-    return user;
+      }
+      const updated = await this.repository.update(id, { isActive: true }, tx);
+      await this.audit.record(tx, {
+        event: 'user.reactivated',
+        entityId: id,
+        before: { isActive: false },
+        after: { isActive: true },
+      });
+      return updated;
+    });
   }
 
   async resetPassword(
@@ -190,8 +209,9 @@ export class UsersService {
       this.assertAdminRoleAllowed(actor, target.role.name);
       await this.repository.update(id, { passwordHash, mustChangePassword: true }, tx);
       await this.sessions.revokeAllForUser(tx, id, new Date());
+      // The event only: the temporary password and its hash are never part of an audit row.
+      await this.audit.record(tx, { event: 'user.password_reset', entityId: id });
     });
-    this.record('user.password_reset', actor, id);
   }
 
   // Privilege escalation guard: only an ADMIN may touch an ADMIN account or hand out the ADMIN
@@ -277,21 +297,6 @@ export class UsersService {
         HttpStatus.CONFLICT,
       );
     }
-  }
-
-  private record(
-    event: UserEvent,
-    actor: AuthenticatedUser,
-    targetId: string,
-    extra?: Record<string, string>,
-  ): void {
-    this.logger.log({
-      event,
-      organizationId: actor.organizationId,
-      actorId: actor.userId,
-      targetId,
-      ...extra,
-    });
   }
 
   private notFound(): DomainException {

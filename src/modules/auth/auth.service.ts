@@ -3,6 +3,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { ERROR_CODES } from '../../common/constants/error-codes';
 import { DomainException } from '../../common/exceptions/domain.exception';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { AuditService } from '../audit-logs/audit.service';
 import { TOKEN_TYPE } from './auth.constants';
 import { AuthRepository, NewRefreshTokenData, StoredRefreshTokenRecord } from './auth.repository';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -24,6 +25,7 @@ export class AuthService {
     private readonly repository: AuthRepository,
     private readonly passwords: PasswordService,
     private readonly tokens: TokenService,
+    private readonly audit: AuditService,
   ) {}
 
   async login({ email, password }: LoginDto): Promise<TokenResponseDto> {
@@ -40,16 +42,31 @@ export class AuthService {
       throw this.invalidCredentials();
     }
 
-    const session = await this.startSession(
+    // Session, lastLoginAt and the audit row commit together BEFORE any token is handed out: if the
+    // audit insert fails, there is no session. Actor and organization are the user loaded from the
+    // database, never anything the request said. A failed login is only logged (flood risk).
+    const now = new Date();
+    const refresh = this.tokens.createRefreshToken(now);
+    await this.repository.inTransaction(async (tx) => {
+      await this.repository.createRefreshToken(
+        this.toRefreshRecord(user.id, user.organizationId, randomUUID(), refresh),
+        tx,
+      );
+      await this.repository.markLogin(user.id, now, tx);
+      await this.audit.record(
+        tx,
+        { event: 'auth.login', entityId: user.id },
+        { actorId: user.id, organizationId: user.organizationId },
+      );
+    });
+    return this.respond(
       {
         userId: user.id,
         organizationId: user.organizationId,
         mustChangePassword: user.mustChangePassword,
       },
-      randomUUID(),
+      refresh.raw,
     );
-    await this.repository.markLogin(user.id, new Date());
-    return session;
   }
 
   async refresh(rawToken: string): Promise<TokenResponseDto> {
@@ -87,7 +104,17 @@ export class AuthService {
   // is gone", already holds), and answering differently would let callers probe for valid tokens.
   async logout(rawToken: string): Promise<void> {
     const stored = await this.repository.findRefreshToken(this.tokens.hashRefreshToken(rawToken));
-    if (stored) await this.repository.revokeFamily(stored.familyId, new Date());
+    if (!stored) return;
+    // Audited only when this call really ended a session: repeating a logout writes nothing.
+    await this.repository.inTransaction(async (tx) => {
+      const revoked = await this.repository.revokeFamily(stored.familyId, new Date(), tx);
+      if (revoked === 0) return;
+      await this.audit.record(
+        tx,
+        { event: 'auth.logout', entityId: stored.userId },
+        { actorId: stored.userId, organizationId: stored.organizationId },
+      );
+    });
   }
 
   async changePassword(
@@ -116,12 +143,18 @@ export class AuthService {
     // A new family: the caller keeps working, every other session (any device) is signed out.
     // Access tokens already issued stay valid until they expire (JWT_ACCESS_EXPIRES_IN); only
     // refresh tokens can be revoked.
-    await this.repository.replacePassword(
-      user.userId,
-      await this.passwords.hash(newPassword),
-      this.toRefreshRecord(user.userId, user.organizationId, randomUUID(), fresh),
-      now,
-    );
+    const passwordHash = await this.passwords.hash(newPassword);
+    await this.repository.inTransaction(async (tx) => {
+      await this.repository.replacePassword(
+        user.userId,
+        passwordHash,
+        this.toRefreshRecord(user.userId, user.organizationId, randomUUID(), fresh),
+        now,
+        tx,
+      );
+      // The event only: neither password nor hash is part of an audit row.
+      await this.audit.record(tx, { event: 'auth.password_changed', entityId: user.userId });
+    });
     return this.respond(
       { userId: user.userId, organizationId: user.organizationId, mustChangePassword: false },
       fresh.raw,
@@ -141,14 +174,6 @@ export class AuthService {
       permissions: user.permissions,
       mustChangePassword: record.mustChangePassword,
     };
-  }
-
-  private async startSession(owner: SessionOwner, familyId: string): Promise<TokenResponseDto> {
-    const refresh = this.tokens.createRefreshToken(new Date());
-    await this.repository.createRefreshToken(
-      this.toRefreshRecord(owner.userId, owner.organizationId, familyId, refresh),
-    );
-    return this.respond(owner, refresh.raw);
   }
 
   private async respond(owner: SessionOwner, refreshToken: string): Promise<TokenResponseDto> {

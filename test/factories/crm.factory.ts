@@ -55,6 +55,8 @@ export function createLead(
     status?: LeadStatus;
     score?: number;
     notes?: string;
+    createdAt?: Date;
+    convertedAt?: Date;
     deletedAt?: Date;
   } = {},
 ) {
@@ -113,6 +115,7 @@ export function createDeal(
     status?: DealStatus;
     contactId?: string;
     companyId?: string;
+    closedAt?: Date;
     deletedAt?: Date;
   } = {},
 ) {

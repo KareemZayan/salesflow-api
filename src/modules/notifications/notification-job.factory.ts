@@ -1,4 +1,5 @@
 import { DealStageChangedEvent } from '../deals/events/deal-stage-changed.event';
+import { LeadAssignedEvent } from '../leads/events/lead-assigned.event';
 import { LeadConvertedEvent } from '../leads/events/lead-converted.event';
 import { TaskAssignedEvent } from '../tasks/events/task-assigned.event';
 import { NotificationType } from '../../generated/prisma/client';
@@ -21,6 +22,19 @@ export function taskAssignedJob(event: TaskAssignedEvent): CreateNotificationJob
     body: null,
     data: { taskId: event.taskId },
     dedupeKey: key('task.assigned', event.taskId, event.assignedAt),
+  };
+}
+
+export function leadAssignedJob(event: LeadAssignedEvent): CreateNotificationJob | null {
+  if (event.ownerId === event.actorId) return null;
+  return {
+    organizationId: event.organizationId,
+    userId: event.ownerId,
+    type: NotificationType.LEAD_ASSIGNED,
+    title: 'A lead was assigned to you',
+    body: null,
+    data: { leadId: event.leadId },
+    dedupeKey: key('lead.assigned', event.leadId, event.assignedAt),
   };
 }
 

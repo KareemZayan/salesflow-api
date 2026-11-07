@@ -11,6 +11,7 @@ import {
   CreateNotificationJob,
 } from '../../src/modules/notifications/notification-job';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service';
+import { createLead } from '../factories/crm.factory';
 import { createTestPrisma, resetDatabase } from '../factories/database';
 import {
   createOrganization,
@@ -254,6 +255,113 @@ describe('Notifications (e2e, real Redis)', () => {
       );
       await waitFor(async () => (await rowsOf(rep)).length === 30);
       expect(new Set((await rowsOf(rep)).map((row) => row.dedupeKey)).size).toBe(30);
+    });
+  });
+
+  describe('lead assignment (lead.assigned)', () => {
+    const leadsAssigned = (user: TestUser) =>
+      prisma.notification.findMany({
+        where: { userId: user.id, type: NotificationType.LEAD_ASSIGNED },
+      });
+    const createLeadFor = (tokens: Tokens, ownerId?: string) =>
+      http()
+        .post('/api/v1/leads')
+        .set(as(tokens))
+        .send({ firstName: 'Omar', lastName: 'Khaled', source: 'REFERRAL', ownerId })
+        .expect(201);
+    // A second, different assignment whose notification we wait for: once it has arrived, anything
+    // sent earlier has already passed through the pipeline, so "nothing else" can be asserted.
+    const drain = async () => {
+      const marker = (await createLeadFor(adminT, other.id)).body as { id: string };
+      await waitFor(async () => {
+        const rows = await leadsAssigned(other);
+        return rows.some((row) => (row.payload as { leadId: string }).leadId === marker.id);
+      });
+    };
+
+    it('creating a lead for someone notifies the new owner only, with the lead id', async () => {
+      const lead = (await createLeadFor(adminT, rep.id)).body as { id: string };
+      const [row] = await waitFor(async () => {
+        const rows = await leadsAssigned(rep);
+        return rows.length > 0 && rows;
+      });
+      expect(row).toMatchObject({
+        organizationId: orgA.id,
+        type: NotificationType.LEAD_ASSIGNED,
+        payload: { leadId: lead.id },
+        readAt: null,
+      });
+      expect(await leadsAssigned(orgA.admin)).toHaveLength(0);
+      expect(await leadsAssigned(other)).toHaveLength(0);
+    });
+
+    it('creating a lead for yourself notifies nobody', async () => {
+      await createLeadFor(adminT);
+      await createLeadFor(repT);
+      await drain();
+      expect(await leadsAssigned(orgA.admin)).toHaveLength(0);
+      expect(await leadsAssigned(rep)).toHaveLength(0);
+    });
+
+    it('transferring a lead notifies the NEW owner only; re-sending the same owner notifies nobody', async () => {
+      const lead = (await createLeadFor(adminT, rep.id)).body as { id: string };
+      await waitFor(async () => (await leadsAssigned(rep)).length === 1);
+
+      await http()
+        .patch(`/api/v1/leads/${lead.id}`)
+        .set(as(adminT))
+        .send({ ownerId: other.id })
+        .expect(200);
+      await waitFor(async () => {
+        const rows = await leadsAssigned(other);
+        return rows.some((row) => (row.payload as { leadId: string }).leadId === lead.id);
+      });
+
+      // Same owner again, and an edit that does not touch the owner.
+      await http()
+        .patch(`/api/v1/leads/${lead.id}`)
+        .set(as(adminT))
+        .send({ ownerId: other.id })
+        .expect(200);
+      await http()
+        .patch(`/api/v1/leads/${lead.id}`)
+        .set(as(adminT))
+        .send({ notes: 'call back' })
+        .expect(200);
+      await drain();
+
+      const forLead = (await leadsAssigned(other)).filter(
+        (row) => (row.payload as { leadId: string }).leadId === lead.id,
+      );
+      expect(forLead).toHaveLength(1);
+      expect(await leadsAssigned(rep)).toHaveLength(1); // the previous owner is told nothing new
+      expect(await leadsAssigned(orgA.admin)).toHaveLength(0);
+    });
+
+    it('lead conversion sends no lead.assigned (only lead.converted to the owner)', async () => {
+      const lead = await createLead(
+        prisma,
+        { organizationId: orgA.id, ownerId: rep.id },
+        { status: 'QUALIFIED' },
+      );
+      await http().post(`/api/v1/leads/${lead.id}/convert`).set(as(adminT)).send({}).expect(200);
+      await waitFor(async () =>
+        (await rowsOf(rep)).some((row) => row.type === NotificationType.LEAD_CONVERTED),
+      );
+      await drain();
+      expect(await leadsAssigned(rep)).toHaveLength(0);
+    });
+
+    it('tenant isolation: a lead cannot be assigned across organizations, and nobody there is notified', async () => {
+      const res = await http()
+        .post('/api/v1/leads')
+        .set(as(adminT))
+        .send({ firstName: 'O', lastName: 'K', source: 'OTHER', ownerId: repB.id })
+        .expect(400);
+      expect(res.body.code).toBe('INVALID_OWNER');
+      await drain();
+      expect(await leadsAssigned(repB)).toHaveLength(0);
+      expect(await prisma.notification.count({ where: { organizationId: orgB.id } })).toBe(0);
     });
   });
 

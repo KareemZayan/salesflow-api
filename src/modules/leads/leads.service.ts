@@ -1,5 +1,7 @@
-import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ERROR_CODES } from '../../common/constants/error-codes';
+import { publishDomainEvent } from '../../common/events/publish-domain-event';
 import { DomainException } from '../../common/exceptions/domain.exception';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { resourceNotFound } from '../../common/exceptions/resource-not-found';
@@ -14,6 +16,7 @@ import { ChangeLeadStatusDto } from './dto/change-lead-status.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { ListLeadsQueryDto } from './dto/list-leads-query.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
+import { LEAD_ASSIGNED_EVENT, LeadAssignedEvent } from './events/lead-assigned.event';
 import { LEAD_STATUS_TRANSITIONS } from './lead-status-transitions';
 import {
   LeadAlreadyConvertedException,
@@ -30,10 +33,13 @@ import {
 
 @Injectable()
 export class LeadsService {
+  private readonly logger = new Logger(LeadsService.name);
+
   constructor(
     private readonly repository: LeadsRepository,
     private readonly ownership: OwnershipScopeService,
     @Inject(LEAD_SCORING_STRATEGY) private readonly scoring: LeadScoringStrategy,
+    private readonly events: EventEmitter2,
   ) {}
 
   async list(
@@ -62,10 +68,11 @@ export class LeadsService {
 
   async create(actor: AuthenticatedUser, dto: CreateLeadDto): Promise<LeadRecord> {
     const { ownerId, ...fields } = dto;
-    return this.repository.create({
+    // Every lead has an owner (ownerId is NOT NULL, ADR 0008): the caller unless they assign it.
+    const owner = await ownerForCreate(this.ownership, actor, ownerId);
+    const lead = await this.repository.create({
       ...fields,
-      // Every lead has an owner (ownerId is NOT NULL, ADR 0008): the caller unless they assign it.
-      ownerId: await ownerForCreate(this.ownership, actor, ownerId),
+      ownerId: owner,
       organizationId: actor.organizationId,
       score: this.scoring.score({
         source: dto.source,
@@ -74,6 +81,8 @@ export class LeadsService {
         companyName: dto.companyName ?? null,
       }),
     });
+    this.publishAssigned(actor, lead.id, owner, null);
+    return lead;
   }
 
   async update(actor: AuthenticatedUser, id: string, dto: UpdateLeadDto): Promise<LeadRecord> {
@@ -81,19 +90,25 @@ export class LeadsService {
     const scope = await this.ownership.resolve(actor);
     const { ownerId, ...fields } = dto;
     const changes: LeadChanges = fields;
+    let transfer: { from: string; to: string } | undefined;
 
     if (ownerId !== undefined) {
       const current = await this.repository.findVisible(scope, id);
       if (!current) throw resourceNotFound('Lead');
       // Say "converted" before judging the new owner: the lead is final whoever it goes to.
       if (current.status === LeadStatus.CONVERTED) throw new LeadAlreadyConvertedException();
-      changes.ownerId = await ownerForTransfer(this.ownership, scope, ownerId, current.ownerId);
+      const newOwnerId = await ownerForTransfer(this.ownership, scope, ownerId, current.ownerId);
+      changes.ownerId = newOwnerId;
+      if (newOwnerId) transfer = { from: current.ownerId, to: newOwnerId };
     }
 
     // The write carries the visibility filter itself: if the lead was reassigned away from the
     // caller after the read above, it matches nothing and the answer is the same 404.
     const updated = await this.repository.updateVisible(scope, id, changes, this.rescoreFor(dto));
     if (!updated) throw await this.whyNotEditable(scope, id);
+    // `transfer` exists only for a REAL change (ownerForTransfer returns undefined for the current
+    // owner), so re-sending the same owner publishes nothing.
+    if (transfer) this.publishAssigned(actor, id, transfer.to, transfer.from);
     return updated;
   }
 
@@ -120,6 +135,31 @@ export class LeadsService {
     const scope = await this.ownership.resolve(actor);
     const deleted = await this.repository.deleteVisible(scope, id);
     if (!deleted) throw await this.whyNotEditable(scope, id);
+  }
+
+  // Tells the NEW owner (never the actor creating or taking a lead for themselves). Fire and forget
+  // after the commit: see publishDomainEvent for what that guarantees.
+  private publishAssigned(
+    actor: AuthenticatedUser,
+    leadId: string,
+    ownerId: string,
+    previousOwnerId: string | null,
+  ): void {
+    if (ownerId === actor.userId) return;
+    publishDomainEvent(
+      this.events,
+      this.logger,
+      LEAD_ASSIGNED_EVENT,
+      {
+        organizationId: actor.organizationId,
+        leadId,
+        ownerId,
+        previousOwnerId,
+        actorId: actor.userId,
+        assignedAt: new Date(),
+      } satisfies LeadAssignedEvent,
+      `lead ${leadId}`,
+    );
   }
 
   // An update or delete matched nothing. Look again WITH the caller's visibility: a lead they can

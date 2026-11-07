@@ -6,10 +6,16 @@ import {
   DEAL_STAGE_CHANGED_EVENT,
   DealStageChangedEvent,
 } from '../deals/events/deal-stage-changed.event';
+import { LEAD_ASSIGNED_EVENT, LeadAssignedEvent } from '../leads/events/lead-assigned.event';
 import { LEAD_CONVERTED_EVENT, LeadConvertedEvent } from '../leads/events/lead-converted.event';
 import { TASK_ASSIGNED_EVENT, TaskAssignedEvent } from '../tasks/events/task-assigned.event';
 import { NotificationDispatcher } from './notification-dispatcher.service';
-import { dealStageChangedJob, leadConvertedJob, taskAssignedJob } from './notification-job.factory';
+import {
+  dealStageChangedJob,
+  leadAssignedJob,
+  leadConvertedJob,
+  taskAssignedJob,
+} from './notification-job.factory';
 
 // Observer: turns domain events into notification jobs. It owns no rules of its own; who is told,
 // and what the text says, lives in the factory.
@@ -24,6 +30,11 @@ export class NotificationsListener {
   @OnEvent(TASK_ASSIGNED_EVENT)
   onTaskAssigned(event: TaskAssignedEvent): Promise<void> {
     return this.dispatcher.dispatch(taskAssignedJob(event));
+  }
+
+  @OnEvent(LEAD_ASSIGNED_EVENT)
+  onLeadAssigned(event: LeadAssignedEvent): Promise<void> {
+    return this.dispatcher.dispatch(leadAssignedJob(event));
   }
 
   @OnEvent(LEAD_CONVERTED_EVENT)

@@ -6,18 +6,28 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { validationExceptionFactory } from './common/pipes/validation-exception.factory';
 import { APP_CONFIG_KEY, AppConfig } from './config/app.config';
 import { HEALTH_ROUTE, READINESS_ROUTE } from './infrastructure/health/health.controller';
+import { QUEUE_BOARD_ROUTE } from './infrastructure/queue/queue.constants';
 
 export const SWAGGER_PATH = 'api/docs';
 
-// Strict helmet defaults everywhere. Swagger UI needs inline scripts and styles, so the CSP header
-// is relaxed for the docs path only, and only when the docs exist (never in production).
-function securityHeaders(docsEnabled: boolean) {
+// Strict helmet defaults everywhere. Swagger UI and Bull Board need inline scripts and styles, so the
+// CSP header is relaxed for those paths only, and only when they exist (docs: never in production;
+// board: only when it is mounted). Every other path keeps the strict policy.
+function securityHeaders(relaxed: { prefixes: readonly string[]; segments: readonly string[] }) {
   const strict = helmet();
-  const docs = helmet({ contentSecurityPolicy: false });
+  const noCsp = helmet({ contentSecurityPolicy: false });
   return (req: Request, res: Response, next: NextFunction): void => {
-    const isDocs = docsEnabled && req.path.startsWith(`/${SWAGGER_PATH}`);
-    (isDocs ? docs : strict)(req, res, next);
+    const isRelaxed =
+      relaxed.prefixes.some((prefix) => req.path.startsWith(prefix)) ||
+      relaxed.segments.some((path) => hasPathPrefix(req.path, path));
+    (isRelaxed ? noCsp : strict)(req, res, next);
   };
+}
+
+// Whole path segments only: `/api/v1/queues` matches `/api/v1/queues/x` but not `/api/v1/queues-x`.
+// (Swagger keeps its plain prefix match, so `/api/docs-json` stays relaxed as before.)
+function hasPathPrefix(requestPath: string, prefix: string): boolean {
+  return requestPath === prefix || requestPath.startsWith(`${prefix}/`);
 }
 
 // Shared by main.ts and e2e tests so tests exercise the exact production wiring.
@@ -26,7 +36,15 @@ export function configureApp(app: INestApplication): AppConfig {
 
   // Without this, behind a proxy every request appears to come from the proxy's IP (rate limiting).
   (app.getHttpAdapter().getInstance() as Express).set('trust proxy', config.trustProxy);
-  app.use(securityHeaders(config.nodeEnv !== 'production'));
+  app.use(
+    securityHeaders({
+      prefixes: config.nodeEnv !== 'production' ? [`/${SWAGGER_PATH}`] : [],
+      segments:
+        config.queue.boardEnabled && config.nodeEnv !== 'production'
+          ? [`/${config.globalPrefix}${QUEUE_BOARD_ROUTE}`]
+          : [],
+    }),
+  );
 
   app.setGlobalPrefix(config.globalPrefix, { exclude: [HEALTH_ROUTE, READINESS_ROUTE] });
   app.enableCors({ origin: config.corsOrigins });

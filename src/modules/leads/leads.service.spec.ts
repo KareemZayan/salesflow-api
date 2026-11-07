@@ -1,4 +1,5 @@
 import { HttpException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { OwnershipScopeService } from '../../common/visibility/ownership-scope.service';
 import { VisibilityScope } from '../../common/visibility/visibility.types';
@@ -17,10 +18,12 @@ const repository = {
 };
 const ownership = { resolve: vi.fn(), resolveAssignableOwner: vi.fn() };
 const scoring = { score: vi.fn() };
+const emitAsync = vi.fn();
 const service = new LeadsService(
   repository as unknown as LeadsRepository,
   ownership as unknown as OwnershipScopeService,
   scoring as LeadScoringStrategy,
+  { emitAsync } as unknown as EventEmitter2,
 );
 
 const actor: AuthenticatedUser = {
@@ -69,6 +72,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   ownership.resolve.mockResolvedValue(scope);
   scoring.score.mockReturnValue(42);
+  emitAsync.mockResolvedValue([]);
 });
 
 describe('LeadsService.create', () => {
@@ -257,6 +261,101 @@ describe('LeadsService.update', () => {
       await expect(service.update(actor, 'l1', { ownerId: 'other' })).rejects.toThrow();
       expect(ownership.resolveAssignableOwner).toHaveBeenCalledWith(scope, 'other');
       expect(repository.updateVisible).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('LeadsService: lead.assigned', () => {
+  const assignedEvents = () =>
+    emitAsync.mock.calls.filter(([name]) => name === 'lead.assigned') as [string, object][];
+  const createFor = (ownerId?: string) =>
+    service.create(actor, { firstName: 'O', lastName: 'K', source: LeadSource.OTHER, ownerId });
+
+  describe('on create', () => {
+    it('publishes to the NEW owner when the lead is created for someone else', async () => {
+      ownership.resolveAssignableOwner.mockResolvedValue('r1');
+      repository.create.mockResolvedValue(lead({ id: 'new', ownerId: 'r1' }));
+      await createFor('r1');
+      expect(assignedEvents()).toHaveLength(1);
+      expect(assignedEvents()[0][1]).toMatchObject({
+        organizationId: 'org',
+        leadId: 'new',
+        ownerId: 'r1',
+        previousOwnerId: null,
+        actorId: 'me',
+      });
+    });
+
+    it.each([[undefined], ['me']])(
+      'publishes nothing when the actor keeps the lead (ownerId %s)',
+      async (ownerId) => {
+        repository.create.mockResolvedValue(lead());
+        await createFor(ownerId);
+        expect(assignedEvents()).toHaveLength(0);
+      },
+    );
+
+    it('publishes nothing when the owner is rejected (nothing was created)', async () => {
+      ownership.resolveAssignableOwner.mockRejectedValue(new HttpException('x', 400));
+      await expect(createFor('x')).rejects.toThrow();
+      expect(assignedEvents()).toHaveLength(0);
+    });
+  });
+
+  describe('on update', () => {
+    it('publishes once, to the new owner, with the previous owner, after the write', async () => {
+      repository.findVisible.mockResolvedValue(lead({ ownerId: 'old' }));
+      ownership.resolveAssignableOwner.mockResolvedValue('new');
+      repository.updateVisible.mockResolvedValue(lead({ ownerId: 'new' }));
+      await service.update(actor, 'l1', { ownerId: 'new' });
+      expect(assignedEvents()).toHaveLength(1);
+      expect(assignedEvents()[0][1]).toMatchObject({
+        leadId: 'l1',
+        ownerId: 'new',
+        previousOwnerId: 'old',
+        actorId: 'me',
+      });
+      expect(repository.updateVisible.mock.invocationCallOrder[0]).toBeLessThan(
+        emitAsync.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('publishes nothing when the same owner is sent again', async () => {
+      repository.findVisible.mockResolvedValue(lead({ ownerId: 'old' }));
+      repository.updateVisible.mockResolvedValue(lead({ ownerId: 'old' }));
+      await service.update(actor, 'l1', { ownerId: 'old', notes: 'x' });
+      expect(assignedEvents()).toHaveLength(0);
+    });
+
+    it('publishes nothing for an edit that does not touch the owner', async () => {
+      repository.updateVisible.mockResolvedValue(lead());
+      await service.update(actor, 'l1', { notes: 'x' });
+      expect(assignedEvents()).toHaveLength(0);
+    });
+
+    it('publishes nothing when the actor takes the lead for themselves', async () => {
+      repository.findVisible.mockResolvedValue(lead({ ownerId: 'old' }));
+      ownership.resolveAssignableOwner.mockResolvedValue('me');
+      repository.updateVisible.mockResolvedValue(lead({ ownerId: 'me' }));
+      await service.update(actor, 'l1', { ownerId: 'me' });
+      expect(assignedEvents()).toHaveLength(0);
+    });
+
+    it('publishes nothing when the write matched nothing (lost race, 404 or 409)', async () => {
+      repository.findVisible.mockResolvedValue(lead({ ownerId: 'old' }));
+      ownership.resolveAssignableOwner.mockResolvedValue('new');
+      repository.updateVisible.mockResolvedValue(null);
+      await expect(service.update(actor, 'l1', { ownerId: 'new' })).rejects.toThrow();
+      expect(assignedEvents()).toHaveLength(0);
+    });
+
+    it('a failing listener never fails the request', async () => {
+      emitAsync.mockRejectedValue(new Error('listener exploded'));
+      vi.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
+      repository.findVisible.mockResolvedValue(lead({ ownerId: 'old' }));
+      ownership.resolveAssignableOwner.mockResolvedValue('new');
+      repository.updateVisible.mockResolvedValue(lead({ ownerId: 'new' }));
+      await expect(service.update(actor, 'l1', { ownerId: 'new' })).resolves.toBeDefined();
     });
   });
 });

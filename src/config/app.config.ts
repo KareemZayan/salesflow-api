@@ -29,6 +29,7 @@ export interface RedisConfig {
 export interface QueueConfig {
   prefix: string;
   workersEnabled: boolean;
+  boardEnabled: boolean;
 }
 
 export interface AuthConfig {
@@ -69,6 +70,7 @@ export const appConfig = registerAs(APP_CONFIG_KEY, (): AppConfig => ({
   queue: {
     prefix: process.env.QUEUE_PREFIX as string,
     workersEnabled: process.env.QUEUE_WORKERS_ENABLED === 'true',
+    boardEnabled: process.env.QUEUE_BOARD_ENABLED === 'true',
   },
   auth: {
     accessSecret: process.env.JWT_ACCESS_SECRET as string,

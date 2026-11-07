@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 12 — Queue foundation + Notifications — split in three. 12a done; **12b done (awaiting your review/commit)**; 12c (Bull Board, README) not started — only when you ask.
+Phase 12 — Queue foundation + Notifications — split in three. 12a and 12b done; **12c done (awaiting your review/commit)**. **Phase 12 is complete.**
 
 ## Completed phases
 
@@ -33,6 +33,8 @@ Phase 12 — Queue foundation + Notifications — split in three. 12a done; **12
 - **Phase 11 — Tasks & Follow-ups ✅ complete** (reminder job, overdue scheduler and task notifications are Phase 12)
 - Phase 12a — Queue foundation + notifications (BullMQ 6 on Redis, `JobQueueService` / `QueueWorkersService`, Notifications inbox API, `task.assigned` / `lead.converted` / `deal.stage_changed` consumers, idempotent insert via `Notification.dedupeKey`, Redis readiness ping, ADR 0011) ✅ (2026-11-02) — suggested commit: `feat(queue,notifications): add BullMQ foundation and in-app notifications`
 - Phase 12b — Scheduled jobs (BullMQ job schedulers, cheap cross-tenant sweeps that fan out per-organization jobs, task reminders `TASK_DUE_SOON`, overdue notices `TASK_OVERDUE` via `Task.overdueNotifiedAt`, refresh-token cleanup, notification retention, ADR 0012) ✅ (2026-11-07) — suggested commit: `feat(jobs): add scheduled task reminders, overdue notices and data retention`
+- Phase 12c — Queue operations (Bull Board, development only and closed by default; `lead.assigned` / `LEAD_ASSIGNED`; graceful-shutdown hooks; compose Redis password; README "Background jobs") ✅ (2026-11-07) — suggested commit: `feat(queue): add dev-only Bull Board, lead.assigned notifications and queue operations docs`
+- **Phase 12 — Queue foundation + Notifications ✅ complete**
 
 ## Decisions log
 
@@ -132,14 +134,21 @@ Phase 12 — Queue foundation + Notifications — split in three. 12a done; **12
 - 2026-11-07 — 12b retention (constants, adjustable): read notifications 90 days, unread 180 days (from `createdAt`) in `notifications.constants.ts`; refresh tokens 7 days after `expiresAt` in `auth.constants.ts`, never while the family has a live token. Batches of 1,000, at most 50 per run (`runInBatches`). **Notification retention is a PERMANENT delete**; only the deleted COUNT is logged (tested)
 - 2026-11-07 — 12b known gaps: a lost `task.assigned` event is **still a gap** (event -> enqueue stays best effort; the sweeps only cover the time-based alerts, which self-heal from the task row). The outbox stays a separate decision. **TODO:** `LEAD_ASSIGNED` needs a `lead.assigned` event in Leads (excluded from 12b)
 
+- 2026-11-07 — 12c (ADR 0011): **Bull Board = option A, non-production only.** `QUEUE_BOARD_ENABLED` defaults to `false`; it mounts only when the flag is true AND NODE_ENV is not production (`isQueueBoardEnabled`, `QueueBoardModule.register()` after `ConfigModule.forRoot`). **NODE_ENV=production + flag true = the app refuses to start** (env schema refinement, tested through a real app build). Default compose does not enable it. It has no authentication and shows every organization's payloads: README says local development only. Route `<prefix>/queues`; CSP relaxed for that path only (other paths' headers compared with and without the board in a test)
+- 2026-11-07 — 12c: `@bull-board/nestjs`, `/api`, `/express` 9.11.0 are **regular dependencies**, not dev: `AppModule` imports `QueueBoardModule` statically and the production image installs with `--prod`; a lazy require would only move a missing-package failure to runtime. Queues listed from `QUEUE_NAME_LIST`
+- 2026-11-07 — 12c: `lead.assigned` (`LeadsService.publishAssigned`): after the commit, only for a REAL owner change (`ownerForTransfer` returns undefined for the same owner) or a create for someone other than the actor, to the NEW owner, never the actor, never from lead conversion (it does not go through `LeadsService`). `LeadsService` got an `EventEmitter2` constructor argument (last). New factory `leadAssignedJob`; unit test over every factory proves job payloads hold ids and the tenant only (static titles, no body, UUID-only data)
+- 2026-11-07 — 12c operations: **graceful shutdown was NOT reachable before** (`main.ts` never called `enableShutdownHooks`, so SIGTERM skipped `QueueWorkersService.onModuleDestroy`); fixed in `main.ts` only (no automated test: needs a child process and a signal). **Redis password:** the app already read `REDIS_PASSWORD`; compose Redis now honours it (`--requirepass` when set, authenticated healthcheck, both verified with throwaway containers); base compose publishes no Redis port, the dev override binds 127.0.0.1. **`/health/ready` checks Redis** with a real round-trip through the BullMQ connection (12a). The dev Redis container is recreated on the next `docker compose up` (config changed)
+
 ## Open questions
 
 - **Outbox** for lost events (ADR 0008/0009/0010/0011): separate architectural decision, still open. Touches Leads, Deals and Tasks.
-- **TODO:** `LEAD_ASSIGNED` notification needs a `lead.assigned` event in Leads (not built; excluded from 12a and 12b).
+- **TODO Phase 15:** Bull Board option B: production access behind a separate platform-level credential (NOT a normal organization admin login), plus a way to inspect failed jobs in production.
+- **TODO Phase 15:** require `REDIS_PASSWORD` (and consider TLS) when NODE_ENV=production; today it is optional so the local prod-like compose keeps working. No dead-letter queue or failed-job alerting yet.
+- ~~TODO: `LEAD_ASSIGNED`~~ — done in 12c.
 
 ## Next step
 
-Phase 12c — Bull Board (non-production / admin only), failed-job handling in the README, README job overview — only when you ask.
+Phase 13 — Activities & Audit logs (CLAUDE.md section 13). Carry over the audit TODOs listed in the notes below (deal money changes, task deletes/reassignments, user/role events, `LeadStatusHistory`). Only when you ask.
 
 ## Notes for next session (to save context)
 
@@ -152,6 +161,7 @@ Phase 12c — Bull Board (non-production / admin only), failed-job handling in t
 - Skeleton folders keep a `.gitkeep` only while empty (`src/common/interceptors`); delete it when the first real file arrives. (`queue` and `jobs` got real files in 12a.)
 - Queue (12a): `infrastructure/queue` (constants, types, `JobQueueService.enqueue/ping`, `QueueWorkersService.register`), `jobs/` (processors grouped by domain, `JobsModule`), `modules/notifications` (listener -> `notification-job.factory` -> `NotificationDispatcher` -> queue; `NotificationsService.createFromJob` is the idempotent write). New job = a `QueueName`, a payload extending `TenantJobPayload`, a handler that registers itself in `onModuleInit`. 12b dispatches `TASK_DUE_SOON` / `TASK_OVERDUE` with `dedupeKey`s of the same shape. Bash heredocs with apostrophes fail on this machine; use the Write tool for files.
 - Scheduled jobs (12b): `src/jobs/sweeps` (`organization-sweeps.ts` = the four sweeps, cadence and bucket; `SweepsProcessor.run(sweep, now)`; `SweepSchedulerService`), `src/jobs/organization-job.processor.ts` (Template Method base of the per-org processors in `jobs/tasks`, `jobs/auth`, `jobs/notifications`), `modules/tasks/task-alerts.service.ts` (the loop), `common/utils/batch.util.ts`. New scheduled job = a `QueueName`, a processor extending `OrganizationJobProcessor`, and one entry in `buildOrganizationSweeps`. Sweeps are removed in `scheduled-jobs.e2e-spec.ts` so only test-started ones run. `JobQueueService` now takes a `QUEUES` registry (all queues), not one queue.
+- Queue operations (12c): `infrastructure/queue/queue-board.module.ts` (+ `config/queue-board.ts`), `QUEUE_BOARD_ENABLED` in `env.schema.ts` (refinement), README "Background jobs". `test/e2e/queue-board.e2e-spec.ts` rebuilds the app per case with `vi.resetModules()` because the module graph is decided at import time. `leads.service.spec.ts` has the `lead.assigned` cases; `notifications.e2e-spec.ts` the end-to-end ones.
 - Queue e2e: `createTestApp({ queue: { workers: true } })`, `purgeTestQueues(app)` in `afterAll`, `test/support/wait-for.ts`. Needs `TEST_REDIS_PORT` and the compose Redis published on that port.
 - Prisma: after `pnpm install` run `pnpm prisma:generate` (`build` and `start:dev` do it automatically). Seed locally: `pnpm db:seed`. New migration: `pnpm prisma:migrate` (never edit an applied one).
 - Nested Prisma writes through a composite FK must NOT pass `organizationId` (it comes from the parent). Flat creates must pass it.

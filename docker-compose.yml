@@ -17,10 +17,21 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # No `ports:` here: Redis is reachable only on the compose network. The dev override publishes it
+    # on 127.0.0.1 only. A non-empty REDIS_PASSWORD in .env turns authentication on (the api reads the
+    # same variable); empty keeps the passwordless local setup.
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -c
+      - 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --requirepass "$$REDIS_PASSWORD"; else exec redis-server; fi'
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test:
+        - CMD-SHELL
+        - '[ -z "$$REDIS_PASSWORD" ] || export REDISCLI_AUTH="$$REDIS_PASSWORD"; redis-cli ping | grep -q PONG'
       interval: 5s
       timeout: 3s
       retries: 10

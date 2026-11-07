@@ -83,3 +83,34 @@ describe('parseTrustProxy', () => {
     expect(parseTrustProxy(input)).toBe(expected);
   });
 });
+
+describe('validateEnv: QUEUE_BOARD_ENABLED', () => {
+  it('defaults to false (the board is closed unless asked for)', () => {
+    expect(validateEnv(BASE_ENV).QUEUE_BOARD_ENABLED).toBe('false');
+  });
+
+  it('accepts true outside production', () => {
+    expect(
+      validateEnv({ ...BASE_ENV, NODE_ENV: 'development', QUEUE_BOARD_ENABLED: 'true' })
+        .QUEUE_BOARD_ENABLED,
+    ).toBe('true');
+  });
+
+  it('refuses true in production instead of ignoring it', () => {
+    expect(() =>
+      validateEnv({ ...BASE_ENV, NODE_ENV: 'production', QUEUE_BOARD_ENABLED: 'true' }),
+    ).toThrow(/QUEUE_BOARD_ENABLED.*NODE_ENV=production/);
+  });
+
+  it('accepts false in production', () => {
+    expect(() =>
+      validateEnv({ ...BASE_ENV, NODE_ENV: 'production', QUEUE_BOARD_ENABLED: 'false' }),
+    ).not.toThrow();
+  });
+
+  it('rejects anything but true/false', () => {
+    expect(() => validateEnv({ ...BASE_ENV, QUEUE_BOARD_ENABLED: 'yes' })).toThrow(
+      /QUEUE_BOARD_ENABLED/,
+    );
+  });
+});

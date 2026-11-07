@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { enqueueBestEffort } from '../../infrastructure/queue/best-effort-enqueue';
 import { QUEUE_NAMES } from '../../infrastructure/queue/queue.constants';
 import { JobQueueService } from '../../infrastructure/queue/job-queue.service';
 import { CREATE_NOTIFICATION_JOB, CreateNotificationJob } from './notification-job';
@@ -15,16 +16,10 @@ export class NotificationDispatcher {
 
   async dispatch(job: CreateNotificationJob | null): Promise<void> {
     if (!job) return;
-    try {
-      await this.dispatchStrict(job);
-    } catch (error) {
-      // Ids only (the key names the event and the record), never the title or the payload.
-      this.logger.error(
-        `Could not enqueue a ${job.type} notification (${job.dedupeKey}): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+    // Ids only (the key names the event and the record), never the title or the payload.
+    await enqueueBestEffort(this.logger, `a ${job.type} notification (${job.dedupeKey})`, () =>
+      this.dispatchStrict(job),
+    );
   }
 
   // For the scheduled jobs: nothing has committed yet that a failure could contradict, so a Redis

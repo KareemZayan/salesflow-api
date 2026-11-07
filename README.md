@@ -55,8 +55,10 @@ Never set `true` while the API is directly reachable: any client could then spoo
 
 Asynchronous work runs on [BullMQ](https://docs.bullmq.io/) (Redis). Design and guarantees:
 [ADR 0011](docs/decisions/0011-queue-and-notifications.md) (queue foundation, notifications) and
-[ADR 0012](docs/decisions/0012-scheduled-jobs.md) (scheduled jobs). This section only says how to use and
-operate it; the numbers live in code, not here.
+[ADR 0012](docs/decisions/0012-scheduled-jobs.md) (scheduled jobs) and
+[ADR 0013](docs/decisions/0013-activities.md) (the `activities` queue: system timeline entries, one job
+per target record, idempotent on a dedupe key; a lost event is a missing entry, not an error). This
+section only says how to use and operate it; the numbers live in code, not here.
 
 | What                                                                             | Where                                                                                   |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |

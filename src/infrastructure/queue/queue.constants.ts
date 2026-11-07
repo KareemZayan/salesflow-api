@@ -2,6 +2,8 @@ import { JobsOptions } from 'bullmq';
 
 export const QUEUE_NAMES = {
   NOTIFICATIONS: 'notifications',
+  // System timeline entries (Phase 13a), one job per entry.
+  ACTIVITIES: 'activities',
   // Cross-tenant and repeatable: a run only decides WHICH organizations have work, then fans out.
   SWEEPS: 'sweeps',
   // One queue per kind of per-organization work, so a slow cleanup can never delay a reminder.

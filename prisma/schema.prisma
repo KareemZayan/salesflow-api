@@ -494,6 +494,9 @@ model Activity {
   dealId         String?
   contactId      String?
   companyId      String?
+  // Idempotency key of the job that wrote a system entry (event + target, e.g.
+  // "lead.converted-<leadId>-<ms>-contact-<contactId>"). NULL for manual entries.
+  dedupeKey      String?
   createdAt      DateTime     @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -504,6 +507,9 @@ model Activity {
   company      Company?     @relation(fields: [companyId, organizationId], references: [id, organizationId], onDelete: Restrict)
 
   @@unique([id, organizationId])
+  // NULLs are distinct in PostgreSQL, so manual entries never clash.
+  @@unique([organizationId, dedupeKey])
+  // The CHECK "at least one link is set" is raw SQL in the add_activity_dedupe_key migration.
   // Cursor-paginated timeline per entity (id is the tie-breaker).
   @@index([organizationId, dealId, occurredAt(sort: Desc), id])
   @@index([organizationId, leadId, occurredAt(sort: Desc), id])

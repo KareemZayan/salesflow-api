@@ -86,6 +86,20 @@ export class DealsService {
     return this.repository.findOwnerId(dealId);
   }
 
+  // For the activity timeline: where a deal event also belongs. Null = deleted or never existed.
+  findParties(
+    dealId: string,
+  ): Promise<{ contactId: string | null; companyId: string | null } | null> {
+    return this.repository.findParties(dealId);
+  }
+
+  // For the activity timeline: which referenced deals this caller may see, so details of the others
+  // can be withheld. Ids only; an empty input costs no query.
+  async visibleIds(actor: AuthenticatedUser, ids: readonly string[]): Promise<ReadonlySet<string>> {
+    if (ids.length === 0) return new Set();
+    return this.repository.findVisibleIds(await this.ownership.resolve(actor), ids);
+  }
+
   // For modules that link their records to a deal (tasks). Nothing blocks deleting a deal, so no lock
   // is needed. Missing, deleted, foreign and not-visible deals all give the same 400.
   async assertLinkable(scope: VisibilityScope, dealId: string): Promise<void> {

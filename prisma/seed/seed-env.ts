@@ -8,7 +8,14 @@ import { ORGANIZATION_SLUG_PATTERN } from '../../src/common/policies/organizatio
 const seedEnvSchema = z
   .object({
     DATABASE_URL: z.string().min(1),
-    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    // Required, no default (same rule as the API): a forgotten value must not switch the production
+    // guards below off.
+    NODE_ENV: z.enum(['development', 'test', 'production'], {
+      error: (issue) =>
+        issue.input === undefined
+          ? 'is required; set it to development, test or production'
+          : 'must be one of development, test, production',
+    }),
     SEED_DEMO_DATA: z
       .enum(['true', 'false'])
       .default('false')

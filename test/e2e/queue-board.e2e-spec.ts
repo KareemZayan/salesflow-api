@@ -56,6 +56,19 @@ describe('Bull Board (e2e)', () => {
     expect(res.text).toContain('<html');
   });
 
+  it('is not put under Cache-Control: no-store (its UI is not API data), while API routes next to it are', async () => {
+    app = await startApp({ NODE_ENV: 'development', QUEUE_BOARD_ENABLED: 'true' });
+
+    const board = await request(app.getHttpServer()).get(BOARD_PATH).expect(200);
+    const api = await request(app.getHttpServer()).get('/api/v1/auth/me').expect(401);
+    // Same first characters, but not the board: it is an API path and keeps the header.
+    const lookalike = await request(app.getHttpServer()).get('/api/v1/queues-lookalike');
+
+    expect(board.headers['cache-control']).not.toBe('no-store');
+    expect(api.headers['cache-control']).toBe('no-store');
+    expect(lookalike.headers['cache-control']).toBe('no-store');
+  });
+
   it('refuses to start in production with the flag on (fail fast, never silently ignored)', async () => {
     // ConfigModule validates the environment while the application is being built.
     await expect(startApp({ NODE_ENV: 'production', QUEUE_BOARD_ENABLED: 'true' })).rejects.toThrow(

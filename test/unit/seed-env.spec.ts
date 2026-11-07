@@ -2,6 +2,7 @@ import { PLACEHOLDER_PASSWORD as PLACEHOLDER_ADMIN_PASSWORD } from '../../src/co
 import { parseSeedEnv } from '../../prisma/seed/seed-env';
 
 const BASE = {
+  NODE_ENV: 'development',
   DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
   SEED_ADMIN_EMAIL: 'admin@example.com',
   SEED_ADMIN_PASSWORD: 'a-long-enough-password',
@@ -15,6 +16,15 @@ describe('parseSeedEnv', () => {
       SEED_ORG_SLUG: 'demo',
       SEED_DEMO_DATA: true,
     });
+  });
+
+  it('requires NODE_ENV: a forgotten value must not switch the production guards off', () => {
+    const withoutNodeEnv: Record<string, string> = { ...BASE };
+    delete withoutNodeEnv.NODE_ENV;
+    expect(() => parseSeedEnv(withoutNodeEnv)).toThrow(/NODE_ENV: is required/);
+    expect(() => parseSeedEnv({ ...BASE, NODE_ENV: 'staging' })).toThrow(
+      /NODE_ENV: must be one of/,
+    );
   });
 
   it('allows the placeholder password outside production', () => {

@@ -6,7 +6,14 @@ const duration = (fallback: string) =>
 
 export const envSchema = z
   .object({
-    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    // Required, with no default: a missing value must not silently mean "not production" (that would
+    // turn Swagger on and skip every production guard below). Docker sets it; see .env.example.
+    NODE_ENV: z.enum(['development', 'test', 'production'], {
+      error: (issue) =>
+        issue.input === undefined
+          ? 'is required; set it to development, test or production'
+          : 'must be one of development, test, production',
+    }),
     PORT: z.coerce.number().int().positive().default(3000),
     API_PREFIX: z.string().default('api'),
     API_VERSION: z.string().default('1'),
@@ -21,10 +28,26 @@ export const envSchema = z
     TRUST_PROXY: z.string().default('false'),
     // Prisma connection string. In Docker it is derived from the POSTGRES_* variables (see docker-compose.yml).
     DATABASE_URL: z.string().min(1),
+    // Connection pool and timeouts. Sizing rules and the capacity arithmetic: ADR 0016.
+    // Per API process (one pool each). All instances together must stay below PostgreSQL's
+    // max_connections minus a reserve: DB_POOL_MAX <= floor((max_connections - 10) / instances).
+    DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+    // How long a request waits for a free connection (also the `maxWait` of a transaction) before it
+    // is answered 503 DATABASE_BUSY. Short on purpose: a queue longer than a user will wait helps nobody.
+    DB_POOL_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
+    // Longest an interactive transaction may run, lock waits included (Prisma's own default is 5000).
+    DB_TRANSACTION_TIMEOUT_MS: z.coerce.number().int().min(1000).default(10000),
+    // Server-side cap on ONE statement, including a wait for a lock. Must stay below the transaction
+    // timeout: Prisma cannot interrupt a statement blocked on a lock, PostgreSQL can.
+    DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(1000).default(8000),
+    // Server-side cap on a connection sitting idle inside an open transaction (a leaked transaction
+    // would otherwise keep its locks). Must be larger than DB_TRANSACTION_TIMEOUT_MS so the client-side
+    // limit always fires first.
+    DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30000),
     // Redis backs the BullMQ queues; /health/ready pings it through the queue connection.
     REDIS_HOST: z.string().default('localhost'),
     REDIS_PORT: z.coerce.number().int().positive().default(6379),
-    // Blank = no authentication (the local compose Redis).
+    // Blank = no authentication (the local compose Redis). Required when NODE_ENV=production.
     REDIS_PASSWORD: z.string().default(''),
     // Key prefix of every queue, so two environments (or e2e runs) can share one Redis safely.
     QUEUE_PREFIX: z
@@ -49,12 +72,38 @@ export const envSchema = z
     THROTTLE_AUTH_LIMIT: z.coerce.number().int().positive().default(10),
   })
   .superRefine((env, ctx) => {
-    if (env.NODE_ENV === 'production' && env.QUEUE_BOARD_ENABLED === 'true') {
+    // Prisma's transaction timeout cannot interrupt a statement blocked on a lock (the connection
+    // stays busy until the lock frees up); only the server-side statement timeout can. So it must be
+    // the smaller of the two for the transaction limit to mean anything. ADR 0016.
+    if (env.DB_STATEMENT_TIMEOUT_MS >= env.DB_TRANSACTION_TIMEOUT_MS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DB_STATEMENT_TIMEOUT_MS'],
+        message: 'must be smaller than DB_TRANSACTION_TIMEOUT_MS',
+      });
+    }
+    if (env.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS <= env.DB_TRANSACTION_TIMEOUT_MS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DB_IDLE_IN_TRANSACTION_TIMEOUT_MS'],
+        message: 'must be larger than DB_TRANSACTION_TIMEOUT_MS',
+      });
+    }
+    if (env.NODE_ENV !== 'production') return;
+    if (env.QUEUE_BOARD_ENABLED === 'true') {
       ctx.addIssue({
         code: 'custom',
         path: ['QUEUE_BOARD_ENABLED'],
         message:
           'Bull Board has no authentication and must not be enabled when NODE_ENV=production',
+      });
+    }
+    // Redis holds every organization's queued job payloads. Whitespace is not a password.
+    if (env.REDIS_PASSWORD.trim() === '') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['REDIS_PASSWORD'],
+        message: 'is required when NODE_ENV=production',
       });
     }
   });

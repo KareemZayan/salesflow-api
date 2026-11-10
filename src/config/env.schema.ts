@@ -70,6 +70,10 @@ export const envSchema = z
     THROTTLE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
     THROTTLE_LIMIT: z.coerce.number().int().positive().default(100),
     THROTTLE_AUTH_LIMIT: z.coerce.number().int().positive().default(10),
+    // Where the rate-limit counters live. `redis` (default): shared by every instance; if Redis cannot
+    // be consulted, auth routes answer 503 THROTTLE_UNAVAILABLE and other routes use a per-instance
+    // limiter (ADR 0016). `memory`: per process, for development and tests only; refused in production.
+    THROTTLE_STORAGE: z.enum(['redis', 'memory']).default('redis'),
   })
   .superRefine((env, ctx) => {
     // Prisma's transaction timeout cannot interrupt a statement blocked on a lock (the connection
@@ -96,6 +100,15 @@ export const envSchema = z
         path: ['QUEUE_BOARD_ENABLED'],
         message:
           'Bull Board has no authentication and must not be enabled when NODE_ENV=production',
+      });
+    }
+    // Per-process counters multiply the brute-force allowance by the number of instances and reset on
+    // every restart.
+    if (env.THROTTLE_STORAGE !== 'redis') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['THROTTLE_STORAGE'],
+        message: 'must be redis when NODE_ENV=production',
       });
     }
     // Redis holds every organization's queued job payloads. Whitespace is not a password.

@@ -279,8 +279,8 @@ describe('database failure modes (integration)', () => {
 
     it('database unreachable behind a name with several addresses (localhost): ECONNREFUSED -> UNAVAILABLE', async () => {
       // `localhost` is ::1 and 127.0.0.1 on a dual-stack machine, where the refusal arrives as
-      // ECONNREFUSED (a known-request code for model queries, a bare AggregateError when a
-      // transaction starts). On a single-address machine it is P1001. Either way: UNAVAILABLE.
+      // ECONNREFUSED (a known-request code for model AND raw queries, a bare AggregateError when a
+      // transaction starts). On a single-address machine it is P1001 / P2010. Either way: UNAVAILABLE.
       const dead = client({
         connectionString: 'postgresql://nobody:none@localhost:1/none',
         connectionTimeoutMillis: 500,

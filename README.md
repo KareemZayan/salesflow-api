@@ -40,7 +40,7 @@ Users are created by an admin (no public sign-up). `POST /api/v1/auth/login` ret
 - **Refresh**: `POST /auth/refresh` rotates the refresh token. Sending an already-used token again within `REFRESH_REUSE_GRACE_SECONDS` (default 10) answers **409 `TOKEN_ROTATED_RECENTLY`**: the session is still valid, so do **not** log the user out; retry with the token from the latest successful response. Replaying a token after that window answers 401 `TOKEN_REUSED` and revokes the whole session.
 - **Logout**: `POST /auth/logout` with the refresh token in the body; always 204.
 - **Change password**: revokes all refresh tokens and returns a new pair. Access tokens issued earlier stay valid until they expire.
-- **Rate limiting**: login is limited per IP + email (`THROTTLE_AUTH_LIMIT` per `THROTTLE_TTL_SECONDS`). Counters are in memory (per instance, reset on restart); move them to Redis before scaling out.
+- **Rate limiting**: login is limited per IP + email (`THROTTLE_AUTH_LIMIT` per `THROTTLE_TTL_SECONDS`), every other route per IP (`THROTTLE_LIMIT`). The counters live in Redis and are shared by every instance (see "Rate limiting" below).
 
 ### Behind a reverse proxy (`TRUST_PROXY`)
 
@@ -52,12 +52,35 @@ The rate limiter keys on the client IP. Behind nginx, a cloud load balancer or s
 | One reverse proxy / load balancer in front                              | `1`                                                        |
 | Several hops, or a known proxy network                                  | hop count, or a subnet list such as `loopback, 10.0.0.0/8` |
 
-Never set `true` while the API is directly reachable: any client could then spoof `X-Forwarded-For` to dodge the limit.
+Never set `true` while the API is directly reachable: any client could then spoof `X-Forwarded-For` to dodge the limit and to write a fake IP into the audit log. Prefer the exact number of proxy hops (`1`, `2`, ...). With `NODE_ENV=production`, `TRUST_PROXY=true` logs a warning at startup saying so.
 
 With `NODE_ENV=production`, the API logs a warning at startup when `TRUST_PROXY` is `false` (easy to forget
 behind a proxy) or `CORS_ORIGINS` is empty (browsers on other origins are blocked). Both are valid
 settings, so they warn instead of stopping the app. Responses under `/api/v1` carry `Cache-Control: no-store`
 (they hold tokens and tenant data); `/health` and the development-only Swagger and Bull Board UIs do not.
+
+## Rate limiting
+
+Counters are kept in Redis (`THROTTLE_STORAGE=redis`, the default), so N instances share one limit instead of
+allowing N times as many attempts. It is a **sliding window**: a request counts for `THROTTLE_TTL_SECONDS`
+after it is made. `THROTTLE_STORAGE=memory` (per process, lost on restart) exists for development and tests
+only and is **refused when `NODE_ENV=production`**. Design and numbers: [ADR 0016](docs/decisions/0016-hardening.md).
+
+**When Redis cannot be consulted** (down, slow, or the script failing) the limiter never silently turns off:
+
+| Route                                                  | While Redis is unavailable                                                                                                                            |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Login, refresh, change-password (the `auth` throttler) | **Fails closed**: `503` with code `THROTTLE_UNAVAILABLE` and `Retry-After`. The request never reaches the handler, so no password is checked.         |
+| Every other route (the `default` throttler)            | Falls back to a limiter in that instance's memory, with the same limit. **Never unlimited, but N times weaker with N instances** until Redis is back. |
+
+After 3 failures in a row a circuit breaker treats Redis as down for 5 seconds, so requests are answered at once
+instead of each waiting for the 250 ms timeout; then one request probes it. The outage and the recovery are
+each logged once, and the number of requests refused is in the recovery line. `/health/ready` reports the
+throttle storage (`throttle`) through its own connection.
+
+Redis must run with `maxmemory-policy noeviction` (BullMQ needs it too): an evicting Redis can drop a counter
+early and let requests through. The API logs a warning at startup if it is not (and skips the check, without
+failing, if Redis refuses `CONFIG`).
 
 ## Audit logs
 

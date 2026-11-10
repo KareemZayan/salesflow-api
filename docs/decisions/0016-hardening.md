@@ -1,8 +1,8 @@
 # ADR 0016: Hardening (Phase 15)
 
-Status: in progress. 15a (database failure handling) and 15b (required NODE_ENV, production guards,
-no-store) are implemented. 15c-15g append their sections here as they land (throttler storage, tenant
-isolation and the RLS decision, operations, performance measurement).
+Status: in progress. 15a (database failure handling), 15b (required NODE_ENV, production guards,
+no-store) and 15c (rate-limit counters in Redis) are implemented. 15d-15g append their sections here as
+they land (tenant isolation and the RLS decision, operations, performance measurement).
 
 Builds on [ADR 0002](0002-tenant-scoping.md) (tenant scoping), [ADR 0004](0004-users-admin.md) (the
 advisory locks) and [ADR 0014](0014-audit-logs.md) (fail-closed audit writes).
@@ -22,17 +22,18 @@ failures a loaded system actually produces. The pool and every timeout were also
 Nothing below is assumed. `test/integration/prisma-failures.integration-spec.ts` provokes each case
 against a real database and pins the shape, so a driver upgrade that changes one fails a test.
 
-| Situation                                 | Thrown                                                                                                                   | Notes                                                                                                                                                                                                                                                                                                                                                          |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No free connection (plain query)          | plain `Error`: `timeout exceeded when trying to connect`                                                                 | **Not a Prisma error.** From `pg`.                                                                                                                                                                                                                                                                                                                             |
-| Transaction cannot start (`maxWait`)      | `P2028`, `meta: {}`, "Unable to start a transaction in…"                                                                 |                                                                                                                                                                                                                                                                                                                                                                |
-| Transaction ran past its limit            | `P2028`, `meta.timeout` is a number                                                                                      | Query-after-expiry and commit-after-expiry look the same; both are rolled back.                                                                                                                                                                                                                                                                                |
-| Use of a finished transaction client      | `P2028`, `meta: {}`, "Transaction already closed"                                                                        | A **code bug** (a leaked `tx`), not load.                                                                                                                                                                                                                                                                                                                      |
-| `statement_timeout` / `lock_timeout`      | `P2010` (raw query) or `P2039` (model query); SQLSTATE `57014` / `55P03` in `meta.driverAdapterError.cause.originalCode` | The Prisma code depends on the call path, the SQLSTATE does not.                                                                                                                                                                                                                                                                                               |
-| Deadlock                                  | `P2010` (raw) or `P2034` (model); SQLSTATE `40P01`                                                                       | `P2034` is **not** raised for raw queries.                                                                                                                                                                                                                                                                                                                     |
-| Serialization failure                     | `P2034`, SQLSTATE `40001`                                                                                                |                                                                                                                                                                                                                                                                                                                                                                |
-| Database unreachable                      | `P1001` (single address, DNS failure)                                                                                    | Other shapes, found in 15b when an HTTP test returned 500: raw query `P2010` with cause `kind: DatabaseNotReachable`; a name with several addresses (`localhost`) gives a known-request error with `code: 'ECONNREFUSED'` for model queries and a **bare `AggregateError`** (`code: 'ECONNREFUSED'`) when a transaction starts. All classify as `UNAVAILABLE`. |
-| Backend killed / idle-in-transaction kill | plain `Error`: `Client has encountered a connection error…`                                                              | Pool recovers; the next query works.                                                                                                                                                                                                                                                                                                                           |
+| Situation                                                                             | Thrown                                                                                                                                                                                                                                                                         | Notes                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No free connection (plain query)                                                      | plain `Error`: `timeout exceeded when trying to connect`                                                                                                                                                                                                                       | **Not a Prisma error.** From `pg`.                                                                                                                                             |
+| Transaction cannot start (`maxWait`)                                                  | `P2028`, `meta: {}`, "Unable to start a transaction in…"                                                                                                                                                                                                                       |                                                                                                                                                                                |
+| Transaction ran past its limit                                                        | `P2028`, `meta.timeout` is a number                                                                                                                                                                                                                                            | Query-after-expiry and commit-after-expiry look the same; both are rolled back.                                                                                                |
+| Use of a finished transaction client                                                  | `P2028`, `meta: {}`, "Transaction already closed"                                                                                                                                                                                                                              | A **code bug** (a leaked `tx`), not load.                                                                                                                                      |
+| `statement_timeout` / `lock_timeout`                                                  | `P2010` (raw query) or `P2039` (model query); SQLSTATE `57014` / `55P03` in `meta.driverAdapterError.cause.originalCode`                                                                                                                                                       | The Prisma code depends on the call path, the SQLSTATE does not.                                                                                                               |
+| Deadlock                                                                              | `P2010` (raw) or `P2034` (model); SQLSTATE `40P01`                                                                                                                                                                                                                             | `P2034` is **not** raised for raw queries.                                                                                                                                     |
+| Serialization failure                                                                 | `P2034`, SQLSTATE `40001`                                                                                                                                                                                                                                                      |                                                                                                                                                                                |
+| Database unreachable, single address / DNS failure                                    | `P1001` (model query, transaction start); **raw query: `P2010`** with cause `kind: DatabaseNotReachable` and no SQLSTATE                                                                                                                                                       | `UNAVAILABLE`. Found in 15b when an HTTP test returned 500.                                                                                                                    |
+| Database unreachable, host with SEVERAL addresses (`localhost` = `::1` + `127.0.0.1`) | **model query:** known-request error, `code: 'ECONNREFUSED'`, `meta: { modelName }`. **raw query:** known-request error, `code: 'ECONNREFUSED'`, **no `meta`**. **transaction start:** a **bare `AggregateError`** (not a Prisma error), `code: 'ECONNREFUSED'`, empty message | `UNAVAILABLE` for all three. The `P2010` shape above is _not_ one of these three; an earlier version of this row mixed them up. Each of the four shapes has its own unit test. |
+| Backend killed / idle-in-transaction kill                                             | plain `Error`: `Client has encountered a connection error…`                                                                                                                                                                                                                    | Pool recovers; the next query works.                                                                                                                                           |
 
 ### The mapping (`common/utils/database-failure.util.ts`, used by `AllExceptionsFilter`)
 
@@ -171,9 +172,7 @@ in `.env`, as it already needed a real `SEED_ADMIN_PASSWORD`. Documented in `.en
 deployment with no browser client), so refusing to start would be wrong. They are forgotten more often
 than they are chosen, though, so `configureApp` logs one warning each at startup
 (`config/production-warnings.ts`, a pure function). They are silent in development and test, and when
-set. **Not covered:** `TRUST_PROXY=true` (every hop trusted, `X-Forwarded-For` spoofable when the API is
-directly reachable). It is documented in the README and was not part of the agreed warning set; it is a
-candidate for a later guard.
+set. `TRUST_PROXY=true` (every hop trusted) was added in 15c; see the 15c section.
 
 ### `Cache-Control: no-store`
 
@@ -213,3 +212,123 @@ other mappings are unchanged.
 - `cache-control.e2e-spec.ts`, plus a Bull Board case in `queue-board.e2e-spec.ts`.
 - A missing `NODE_ENV` is tested at `validateEnv` only: `ConfigModule` also reads `.env`, so deleting the
   variable in an app-level test would silently fall back to the developer's file.
+
+## 15c. Rate-limit counters in Redis
+
+### Why
+
+The limiter kept its counters in the memory of each API process. With N instances a client got N times
+the allowed login attempts, and a restart gave every counter back. The counters now live in Redis
+(`THROTTLE_STORAGE=redis`, the default) and are shared. No package was added: the storage is ours, on the
+`ioredis` dependency that already exists.
+
+### Finding: the library default is a lockout, not a window (a behaviour change, flagged for review)
+
+`@nestjs/throttler` 6.7.1 has two behaviours in one storage, chosen by `blockDuration`. The guard computes
+it as `blockDuration ?? ttl`. We never configured it, so **production has been running the blocking
+branch with `blockDuration = ttl`**: once a client passes the limit it is blocked for a further full
+window, whether or not its old hits have expired. The approved design here is a sliding window, and
+the first end-to-end run failed on every request ("does not support blockDuration") because the guard was
+handing the storage the TTL. The fix is to say `blockDuration: 0` on both throttlers, which selects the
+non-blocking, sliding-window branch in Redis **and in memory mode** (same options, so development matches
+production). Pinned by `throttler.options.spec.ts`, which drives the real `ThrottlerGuard` and shows it
+sends 0 with our options and the TTL without them. Startup fails if a throttler does not say 0 (an unset
+value is the dangerous case); the storage also refuses a `blockDuration > 0` at request time (a route-level
+`@Throttle` override).
+
+What changes for clients: after the limit is reached a client waits until its _oldest_ hit leaves the window
+(at most one window), not a full extra window. The sustained allowance is the same (`limit` per window).
+If a lockout is preferred, the Lua script needs a block branch; that is a decision for the owner.
+
+### Algorithm (`throttle-hit.script.ts`)
+
+One Lua script per hit, so it is atomic. Two keys per tracker: a sorted set of the hits (score = the instant
+each stops counting) and a window key (the instant the current window ends, with its own TTL). It returns
+the same `{ totalHits, timeToExpire, isBlocked, timeToBlockExpire }` as the library in-memory storage,
+step for step, including the hit at `limit + 1`. A blocked hit adds nothing, so a set never holds more than
+`limit` members. Expired hits are trimmed and the TTL renewed on **every** call, so no key outlives its data
+(tested with a real scan: every throttle key has a TTL, and none is left after the window).
+
+**Time comes from Redis (`TIME`) inside the script.** No client clock takes part, so instances whose clocks
+disagree still agree. Tested with two instances whose `Date.now()` differs by two hours, and
+mutation-checked (a script that takes the client time fails two tests).
+
+### What happens when Redis cannot be consulted
+
+| Throttler                                | Redis down, slow, script error, or a malformed reply                                                                                                                                                          |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth` (login, refresh, change-password) | **Fail closed.** `503`, code `THROTTLE_UNAVAILABLE` (its own code, not `DATABASE_UNAVAILABLE`), `Retry-After: 5`, standard body with `requestId`, no mention of Redis. The request never reaches the handler. |
+| `default` (everything else)              | The library in-memory limiter of this instance, same limit. **Never unlimited, but N times weaker with N instances** until Redis is back. Documented as accepted.                                             |
+
+Consistent with ADR 0014: a security control that cannot run stops the operation. The cost is that nobody can
+log in during a Redis outage (readiness reports not-ready then anyway). Any error is a failure: a script error
+or an unexpected reply is never read as "allowed" (tested with a poisoned key against real Redis).
+
+**Circuit breaker.** One Redis round trip is made per throttled request, bounded at 250 ms. After 3
+consecutive failures the breaker opens for 5 s: requests are answered at once with no command sent (a slow
+Redis would otherwise add 250 ms to every request). After the window exactly one request probes Redis; the
+others still fail fast until it answers. A failed probe re-opens it. The breaker clock is monotonic
+(`performance.now()`); it is never used for a rate-limit decision.
+
+**Observability.** The outage is logged once (first failure) and so is the recovery, with the number of
+requests refused with `THROTTLE_UNAVAILABLE` during the outage; `getStats()` keeps the running totals
+(`rejectedUnavailable`, `servedByFallback`). There is no metrics system in the project, so the counter is
+in-process and in the log line. `/health/ready` includes a `throttle` check made through the storage own
+connection (a real PING, or "down" while the breaker is open). It is not derived from the BullMQ ping or the
+cache connection, so a throttle outage cannot hide behind a healthy queue, and the fail-open cache connection
+plays no part in it.
+
+### Keys and Redis settings
+
+- `<QUEUE_PREFIX>:throttle:hits:<hash>` and `<QUEUE_PREFIX>:throttle:window:<hash>`. BullMQ keeps
+  `<prefix>:<queue>:...`; a unit test fails if a queue is ever named `throttle` or `cache`, and an integration
+  test creates a real queue next to throttle keys and checks the two namespaces never overlap.
+- `<hash>` is the SHA-256 the guard computes from route, throttler and tracker. **No email address and no IP
+  is stored**: checked by scanning every key and member after logins with a known email and IP.
+- The connection options (host, port, password, prefix, fail-fast) are one function,
+  `failFastRedisOptions`, shared by the cache and the throttle storage; BullMQ reads the same
+  `AppConfig.redis`. The throttle storage still has a connection of its own.
+- At startup the API warns (never fails) if `maxmemory-policy` is not `noeviction`: an evicting Redis can
+  drop a counter early. It skips the check silently if Redis is down or refuses `CONFIG`.
+
+### THROTTLE_STORAGE
+
+`redis` (default) or `memory`. `memory` is for development and tests and is **refused in production**
+(validation). The e2e default is `memory` because its Redis is unreachable on purpose; the throttling
+suites opt in with `createTestApp({ throttle })` and use the real Redis.
+
+### Residual risks and upgrade paths
+
+1. **Memory.** The window holds up to `limit` members per tracker (about 100 per active IP for the default
+   throttler). Not measured. Upgrade path: a fixed-window counter (one integer per tracker) is O(1) but
+   allows up to twice the limit across a window boundary.
+2. **Not Redis Cluster.** The two keys of a hit are not hash-tagged; a cluster would need that.
+3. **The fallback is N times weaker** during an outage (default throttler only).
+4. **Login is unavailable during a Redis outage** by design (auth fails closed).
+5. **A very slow Redis** costs at most 3 x 250 ms of waiting per instance before the breaker opens.
+6. **The first requests after a cold start** can meet a connection that is not ready yet (no offline
+   queue). `onModuleInit` waits up to 1 s for the connection before the application accepts traffic; after
+   that they are treated like any failure.
+
+### `TRUST_PROXY=true` warning
+
+In production the API warns that `true` trusts every `X-Forwarded-For` hop: a client can forge it to bypass
+rate limiting and to write a fake IP into the audit log, and it says to set the exact number of hops. Hop
+counts are supported (`TRUST_PROXY=1` parses to the number 1, which Express treats as one hop), so no
+follow-up is needed.
+
+### Tests
+
+- Unit: storage with a fake Redis (failure modes, breaker transitions with an injected clock, logs once,
+  counters, probe, eviction check), options and the real guard, filter and exception, health indicator, env
+  rules, `redis-namespaces`. The storage tests were mutation-checked (fail-closed off: 15 failures; breaker
+  fast path off: 5; breaker never opening: 6).
+- Integration (real Redis): parity with the library in-memory storage over five sequences (different limits
+  and windows, hits just before and after the window ends, the hit at `limit + 1`), and every test also
+  asserts that no request silently used the fallback; atomicity (100 concurrent hits, limit 10, one and four
+  connections: exactly 10 pass); clock skew; TTL on every key; no BullMQ collision; a poisoned key.
+- E2E: two apps on one Redis share a limit; no PII in any key; Redis down (auth 503, others limited,
+  readiness down, refusals counted); a stalled Redis through a TCP proxy (auth fails after 250 ms three
+  times, then fast; the breaker opens; it closes again by itself; one outage line, one recovery line);
+  `auth-throttle` now runs on Redis; production refuses `memory`.
+- Real-time parity cannot hit the window boundary to the millisecond; it tests 100 ms either side.

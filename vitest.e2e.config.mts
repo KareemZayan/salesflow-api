@@ -27,6 +27,9 @@ export default defineConfig({
       QUEUE_PREFIX: 'salesflow-test-default',
       LOG_LEVEL: 'silent',
       JWT_ACCESS_SECRET: 'e2e-test-secret-e2e-test-secret-0123456789',
+      // Per-process counters: this default Redis is unreachable on purpose. The suites that test the
+      // Redis throttler opt in through createTestApp({ throttle }), which uses the real Redis.
+      THROTTLE_STORAGE: 'memory',
       // Effectively off, so only the dedicated throttling suite ever sees a 429.
       THROTTLE_LIMIT: '100000',
       THROTTLE_AUTH_LIMIT: '100000',

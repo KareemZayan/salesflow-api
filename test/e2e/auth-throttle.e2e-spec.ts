@@ -2,10 +2,14 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { ERROR_CODES } from '../../src/common/constants/error-codes';
 import { createTestApp } from '../setup/create-test-app';
+import { deleteKeysWithPrefix, testRedis } from '../support/redis-keys';
 
 const LIMIT = 3;
 
-// The only suite where throttling is on: the shared e2e config sets the limits sky-high.
+// The shared e2e config sets the limits sky-high, so only the throttling suites ever see a 429. This one
+// runs on the REAL Redis storage (THROTTLE_STORAGE=redis), the way production does.
+const THROTTLE_PREFIX = `thr-auth-${Date.now()}`;
+
 describe('Auth throttling (e2e)', () => {
   let app: INestApplication;
 
@@ -21,10 +25,15 @@ describe('Auth throttling (e2e)', () => {
   beforeAll(async () => {
     process.env.THROTTLE_AUTH_LIMIT = String(LIMIT);
     process.env.TRUST_PROXY = '1';
-    app = await createTestApp();
+    app = await createTestApp({ throttle: { prefix: THROTTLE_PREFIX } });
   });
 
-  afterAll(() => app.close());
+  afterAll(async () => {
+    await app.close();
+    const redis = testRedis();
+    await deleteKeysWithPrefix(redis, `${THROTTLE_PREFIX}:`);
+    redis.disconnect();
+  });
 
   it('answers 429 once the same IP + email exceeds the limit', async () => {
     for (let i = 0; i < LIMIT; i++) await wrongLogin('10.0.0.1').expect(401);

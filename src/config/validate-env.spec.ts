@@ -221,3 +221,41 @@ describe('validateEnv: production guards', () => {
     );
   });
 });
+
+describe('validateEnv: THROTTLE_STORAGE', () => {
+  it('defaults to redis (the secure choice needs no setting)', () => {
+    expect(validateEnv(BASE_ENV).THROTTLE_STORAGE).toBe('redis');
+  });
+
+  it.each(['development', 'test'])('accepts memory in %s', (nodeEnv) => {
+    expect(
+      validateEnv({ ...BASE_ENV, NODE_ENV: nodeEnv, THROTTLE_STORAGE: 'memory' }).THROTTLE_STORAGE,
+    ).toBe('memory');
+  });
+
+  it('refuses memory in production: per-process counters multiply the brute-force allowance', () => {
+    expect(() =>
+      validateEnv({
+        ...BASE_ENV,
+        NODE_ENV: 'production',
+        REDIS_PASSWORD: 'a-real-secret',
+        THROTTLE_STORAGE: 'memory',
+      }),
+    ).toThrow(/THROTTLE_STORAGE: must be redis when NODE_ENV=production/);
+  });
+
+  it('accepts redis in production', () => {
+    expect(() =>
+      validateEnv({
+        ...BASE_ENV,
+        NODE_ENV: 'production',
+        REDIS_PASSWORD: 'a-real-secret',
+        THROTTLE_STORAGE: 'redis',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects anything else', () => {
+    expect(() => validateEnv({ ...BASE_ENV, THROTTLE_STORAGE: 'off' })).toThrow(/THROTTLE_STORAGE/);
+  });
+});

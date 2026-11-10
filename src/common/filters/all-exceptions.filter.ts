@@ -10,6 +10,7 @@ import {
 import { Request, Response } from 'express';
 import { Prisma } from '../../generated/prisma/client';
 import { ERROR_CODES } from '../constants/error-codes';
+import { ThrottleUnavailableException } from '../exceptions/throttle-unavailable.exception';
 import { classifyDatabaseFailure, DatabaseFailure } from '../utils/database-failure.util';
 
 interface ErrorBody {
@@ -79,6 +80,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const body = failure ? this.fromDatabaseFailure(failure) : this.toBody(exception);
     if (failure && DATABASE_FAILURE_RESPONSES[failure].retryAfter) {
       response.setHeader('Retry-After', String(DATABASE_RETRY_AFTER_SECONDS));
+    }
+    if (exception instanceof ThrottleUnavailableException) {
+      response.setHeader('Retry-After', String(exception.retryAfterSeconds));
     }
     if (body.statusCode >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(exception instanceof Error ? exception.stack : String(exception));

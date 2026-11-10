@@ -9,6 +9,7 @@ import { ValidationError } from 'class-validator';
 import { Prisma } from '../../generated/prisma/client';
 import { ERROR_CODES } from '../constants/error-codes';
 import { DomainException } from '../exceptions/domain.exception';
+import { ThrottleUnavailableException } from '../exceptions/throttle-unavailable.exception';
 import { validationExceptionFactory } from '../pipes/validation-exception.factory';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 
@@ -182,6 +183,31 @@ describe('AllExceptionsFilter', () => {
       const { status, body } = run(new ConflictException('Lead already exists'));
       expect(status).toBe(409);
       expect(body.code).toBe(ERROR_CODES.CONFLICT);
+    });
+  });
+
+  describe('the limiter cannot be consulted (ADR 0016, 15c)', () => {
+    it('answers 503 THROTTLE_UNAVAILABLE in the standard shape, with Retry-After and a requestId', () => {
+      const { status, body, setHeader } = run(new ThrottleUnavailableException(5));
+
+      expect(status).toBe(503);
+      expect(body).toMatchObject({
+        statusCode: 503,
+        error: 'Service Unavailable',
+        code: ERROR_CODES.THROTTLE_UNAVAILABLE,
+        message: 'Request limiting is temporarily unavailable, please retry shortly',
+        path: '/api/v1/leads',
+        requestId: 'req-1',
+      });
+      expect(Number.isNaN(Date.parse(body.timestamp))).toBe(false);
+      expect(setHeader).toHaveBeenCalledWith('Retry-After', '5');
+    });
+
+    it('never mentions Redis, and has its own code (not DATABASE_UNAVAILABLE)', () => {
+      const { body } = run(new ThrottleUnavailableException(5));
+
+      expect(JSON.stringify(body)).not.toMatch(/redis/i);
+      expect(body.code).not.toBe(ERROR_CODES.DATABASE_UNAVAILABLE);
     });
   });
 });

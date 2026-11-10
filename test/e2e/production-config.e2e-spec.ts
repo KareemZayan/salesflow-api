@@ -12,6 +12,7 @@ const KEYS = [
   'TRUST_PROXY',
   'CORS_ORIGINS',
   'QUEUE_BOARD_ENABLED',
+  'THROTTLE_STORAGE',
 ] as const;
 type Env = Partial<Record<(typeof KEYS)[number], string>>;
 
@@ -21,13 +22,16 @@ const PRODUCTION: Env = {
   TRUST_PROXY: '1',
   CORS_ORIGINS: 'https://app.example.com',
   QUEUE_BOARD_ENABLED: 'false',
+  THROTTLE_STORAGE: 'redis',
 };
+
+// Keys a case does not mention get a valid, quiet value (never a blank: the flag and the storage are enums).
+const QUIET_DEFAULTS: Env = { QUEUE_BOARD_ENABLED: 'false', THROTTLE_STORAGE: 'memory' };
 
 async function startApp(env: Env) {
   vi.resetModules();
-  // Every key is set (a blank means "unset", except the flag, which must stay a valid value).
-  for (const key of KEYS)
-    process.env[key] = env[key] ?? (key === 'QUEUE_BOARD_ENABLED' ? 'false' : '');
+  // Every key is set (a blank means "unset", except the enums, which fall back to a quiet valid value).
+  for (const key of KEYS) process.env[key] = env[key] ?? QUIET_DEFAULTS[key] ?? '';
   const { AppModule } = await import('../../src/app.module.js');
   const { configureApp } = await import('../../src/app.setup.js');
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -78,6 +82,12 @@ describe('Production configuration (e2e)', () => {
       );
     });
 
+    it('production with in-memory throttling does not start: per-process counters multiply the brute-force allowance', async () => {
+      await expect(startApp({ ...PRODUCTION, THROTTLE_STORAGE: 'memory' })).rejects.toThrow(
+        /THROTTLE_STORAGE: must be redis when NODE_ENV=production/,
+      );
+    });
+
     it('an unsupported NODE_ENV does not start, whatever .env says', async () => {
       await expect(startApp({ ...PRODUCTION, NODE_ENV: 'staging' })).rejects.toThrow(
         /NODE_ENV: must be one of development, test, production/,
@@ -108,6 +118,20 @@ describe('Production configuration (e2e)', () => {
       const warnings = configWarnings(warn);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toMatch(/TRUST_PROXY is false/);
+      await request(app.getHttpServer()).get('/health').expect(200);
+    });
+
+    it('TRUST_PROXY=true in production: says a client can forge X-Forwarded-For, and asks for a hop count', async () => {
+      const warn = await spyOnConfigWarnings();
+
+      app = await startApp({ ...PRODUCTION, TRUST_PROXY: 'true' });
+
+      const warnings = configWarnings(warn);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/TRUST_PROXY is true/);
+      expect(warnings[0]).toMatch(/forge that header to bypass rate limiting/);
+      expect(warnings[0]).toMatch(/fake IP into the audit log/);
+      expect(warnings[0]).toMatch(/exact number of proxy hops/);
       await request(app.getHttpServer()).get('/health').expect(200);
     });
 

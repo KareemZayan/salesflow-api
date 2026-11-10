@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { withTimeout } from '../../common/utils/with-timeout.util';
 import { APP_CONFIG_KEY, AppConfig } from '../../config/app.config';
+import { failFastRedisOptions } from '../redis/redis-client.options';
 import { CACHE_OPERATION_TIMEOUT_MS } from './cache.constants';
 
 // Pattern: Cache-Aside over Redis. A cache is an optimisation, never a dependency: every failure
@@ -16,17 +17,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
 
   constructor(config: ConfigService) {
     const { redis, queue } = config.getOrThrow<AppConfig>(APP_CONFIG_KEY);
-    this.redis = new Redis({
-      host: redis.host,
-      port: redis.port,
-      password: redis.password,
-      // Same prefix as the queues: a test app or a second environment on one Redis stays apart.
-      keyPrefix: `${queue.prefix}:cache:`,
-      // Commands fail at once while disconnected instead of piling up behind the outage.
-      enableOfflineQueue: false,
-      maxRetriesPerRequest: 1,
-      retryStrategy: (attempt) => Math.min(attempt * 200, 5000),
-    });
+    this.redis = new Redis(failFastRedisOptions(redis, queue, 'cache'));
     // Without a listener an 'error' event would throw inside the client. One line per outage, not
     // one per reconnect attempt.
     this.redis.on('error', (error) => {

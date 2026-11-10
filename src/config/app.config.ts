@@ -49,6 +49,7 @@ export interface AuthConfig {
 }
 
 export interface ThrottleConfig {
+  storage: 'redis' | 'memory';
   ttlMs: number;
   limit: number;
   authLimit: number;
@@ -95,6 +96,7 @@ export const appConfig = registerAs(APP_CONFIG_KEY, (): AppConfig => ({
     refreshReuseGraceMs: Number(process.env.REFRESH_REUSE_GRACE_SECONDS) * 1000,
   },
   throttle: {
+    storage: process.env.THROTTLE_STORAGE as 'redis' | 'memory',
     ttlMs: Number(process.env.THROTTLE_TTL_SECONDS) * 1000,
     limit: Number(process.env.THROTTLE_LIMIT),
     authLimit: Number(process.env.THROTTLE_AUTH_LIMIT),

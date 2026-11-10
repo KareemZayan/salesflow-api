@@ -4,20 +4,23 @@ import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ClsModule } from 'nestjs-cls';
 import { APP_CONFIG_KEY, AppConfig } from '../config/app.config';
+import { RedisThrottlerStorage } from '../infrastructure/throttler/redis-throttler.storage';
+import {
+  REDIS_THROTTLER_STORAGE,
+  ThrottlerStorageModule,
+} from '../infrastructure/throttler/throttler-storage.module';
 import { AllExceptionsFilter } from './filters/all-exceptions.filter';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PasswordChangeRequiredGuard } from './guards/password-change-required.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RolesGuard } from './guards/roles.guard';
-import { authThrottleTracker, isAuthThrottled } from './guards/throttle.util';
 import {
   HTTP_REQUEST_KEY,
   RequestLike,
   RequestMetadataService,
 } from './request-context/request-metadata.service';
 import { TenantContextService } from './tenant/tenant-context.service';
-
-export const AUTH_THROTTLER = 'auth';
+import { buildThrottlerOptions } from './throttler.options';
 
 @Global()
 @Module({
@@ -31,30 +34,14 @@ export const AUTH_THROTTLER = 'auth';
         setup: (cls, req: RequestLike) => cls.set(HTTP_REQUEST_KEY, req),
       },
     }),
-    // In-memory counters: fine for one instance, reset on restart. Move the storage to Redis
-    // (@nest-lab/throttler-storage-redis) before running more than one API instance.
+    // Counters live in Redis (shared by every instance) unless THROTTLE_STORAGE=memory, which is for
+    // development and tests only and is refused in production. What happens when Redis cannot be
+    // consulted: ADR 0016, section 15c.
     ThrottlerModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const { throttle } = config.getOrThrow<AppConfig>(APP_CONFIG_KEY);
-        return {
-          throttlers: [
-            {
-              name: 'default',
-              ttl: throttle.ttlMs,
-              limit: throttle.limit,
-              skipIf: isAuthThrottled,
-            },
-            {
-              name: AUTH_THROTTLER,
-              ttl: throttle.ttlMs,
-              limit: throttle.authLimit,
-              skipIf: (context) => !isAuthThrottled(context),
-              getTracker: authThrottleTracker,
-            },
-          ],
-        };
-      },
+      imports: [ThrottlerStorageModule],
+      inject: [ConfigService, REDIS_THROTTLER_STORAGE],
+      useFactory: (config: ConfigService, storage: RedisThrottlerStorage | null) =>
+        buildThrottlerOptions(config.getOrThrow<AppConfig>(APP_CONFIG_KEY).throttle, storage),
     }),
   ],
   providers: [

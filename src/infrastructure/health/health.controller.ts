@@ -9,6 +9,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { Public } from '../../common/decorators/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisHealthIndicator } from './indicators/redis-health.indicator';
+import { ThrottleStorageHealthIndicator } from './indicators/throttle-storage-health.indicator';
 
 // Mounted outside the /api/v1 prefix (see main.ts) so orchestrators can probe a stable path.
 export const HEALTH_ROUTE = 'health';
@@ -26,6 +27,7 @@ export class HealthController {
     private readonly prismaHealth: PrismaHealthIndicator,
     private readonly prisma: PrismaService,
     private readonly redis: RedisHealthIndicator,
+    private readonly throttle: ThrottleStorageHealthIndicator,
   ) {}
 
   // Liveness: the process is up. Must not depend on external services.
@@ -42,6 +44,7 @@ export class HealthController {
     return this.health.check([
       () => this.prismaHealth.pingCheck('postgres', this.prisma, { timeout: DB_CHECK_TIMEOUT_MS }),
       () => this.redis.check('redis'),
+      () => this.throttle.check('throttle'),
     ]);
   }
 }

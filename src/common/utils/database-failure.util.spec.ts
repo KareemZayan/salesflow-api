@@ -27,23 +27,51 @@ describe('classifyDatabaseFailure', () => {
     expect(classifyDatabaseFailure(known('P1001'))).toBe('UNAVAILABLE');
   });
 
-  describe('other shapes of an unreachable database (observed)', () => {
-    it('a raw query reports it as P2010 with a DatabaseNotReachable cause and no SQLSTATE', () => {
-      const raw = known('P2010', {
-        driverAdapterError: { cause: { kind: 'DatabaseNotReachable' } },
+  // The shapes below were observed against a dead database (probe in ADR 0016). A host name that
+  // resolves to several addresses (`localhost` = ::1 + 127.0.0.1) fails differently from one that
+  // resolves to a single address, and differently per call path.
+  describe('unreachable database: a host with SEVERAL addresses (3 shapes) and a single address (1)', () => {
+    it('several addresses, MODEL query: PrismaClientKnownRequestError, code ECONNREFUSED, meta { modelName }', () => {
+      const error = new Prisma.PrismaClientKnownRequestError('', {
+        code: 'ECONNREFUSED',
+        clientVersion: 'test',
+        meta: { modelName: 'User' },
       });
-      expect(classifyDatabaseFailure(raw)).toBe('UNAVAILABLE');
+
+      expect(error.code).toBe('ECONNREFUSED');
+      expect(error.meta).toEqual({ modelName: 'User' });
+      expect(classifyDatabaseFailure(error)).toBe('UNAVAILABLE');
     });
 
-    it('a host with several addresses: model queries carry ECONNREFUSED as the Prisma code', () => {
-      expect(classifyDatabaseFailure(known('ECONNREFUSED', { modelName: 'User' }))).toBe(
-        'UNAVAILABLE',
-      );
+    it('several addresses, RAW query: PrismaClientKnownRequestError, code ECONNREFUSED, NO meta at all', () => {
+      const error = new Prisma.PrismaClientKnownRequestError('', {
+        code: 'ECONNREFUSED',
+        clientVersion: 'test',
+      });
+
+      expect(error.code).toBe('ECONNREFUSED');
+      expect(error.meta).toBeUndefined();
+      expect(classifyDatabaseFailure(error)).toBe('UNAVAILABLE');
     });
 
-    it('a host with several addresses: starting a transaction throws a bare AggregateError', () => {
-      const refused = Object.assign(new AggregateError([], ''), { code: 'ECONNREFUSED' });
-      expect(classifyDatabaseFailure(refused)).toBe('UNAVAILABLE');
+    it('several addresses, TRANSACTION START: a bare AggregateError (not a Prisma error), code ECONNREFUSED, empty message', () => {
+      const error = Object.assign(new AggregateError([], ''), { code: 'ECONNREFUSED' });
+
+      expect(error).not.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+      expect(error.message).toBe('');
+      expect(classifyDatabaseFailure(error)).toBe('UNAVAILABLE');
+    });
+
+    it('SINGLE address, RAW query (not a several-address shape): P2010, cause kind DatabaseNotReachable, no SQLSTATE', () => {
+      const error = known('P2010', {
+        driverAdapterError: { cause: { kind: 'DatabaseNotReachable', host: '127.0.0.1', port: 1 } },
+      });
+
+      expect(error.code).toBe('P2010');
+      const { cause } = (error.meta as { driverAdapterError: { cause: Record<string, unknown> } })
+        .driverAdapterError;
+      expect(cause.originalCode).toBeUndefined();
+      expect(classifyDatabaseFailure(error)).toBe('UNAVAILABLE');
     });
 
     it('an AggregateError with any other code, or none, is left alone', () => {

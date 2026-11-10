@@ -74,7 +74,7 @@ describe('Throttle storage on Redis (e2e)', () => {
       const res = await login(second, '10.1.0.1').expect(429);
 
       expect(res.body).toMatchObject({ statusCode: 429, code: ERROR_CODES.TOO_MANY_REQUESTS });
-      expect(res.headers['retry-after-auth']).toBeDefined();
+      expect(res.headers['retry-after-login']).toBeDefined();
       // Neither instance fell back to a limiter of its own.
       expect(storageOf(first).getStats()).toMatchObject({
         servedByFallback: 0,

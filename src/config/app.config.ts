@@ -53,6 +53,7 @@ export interface ThrottleConfig {
   ttlMs: number;
   limit: number;
   authLimit: number;
+  authIpLimit: number;
 }
 
 export function parseTrustProxy(value: string): TrustProxy {
@@ -100,5 +101,6 @@ export const appConfig = registerAs(APP_CONFIG_KEY, (): AppConfig => ({
     ttlMs: Number(process.env.THROTTLE_TTL_SECONDS) * 1000,
     limit: Number(process.env.THROTTLE_LIMIT),
     authLimit: Number(process.env.THROTTLE_AUTH_LIMIT),
+    authIpLimit: Number(process.env.THROTTLE_AUTH_IP_LIMIT),
   },
 }));

@@ -259,3 +259,43 @@ describe('validateEnv: THROTTLE_STORAGE', () => {
     expect(() => validateEnv({ ...BASE_ENV, THROTTLE_STORAGE: 'off' })).toThrow(/THROTTLE_STORAGE/);
   });
 });
+
+describe('validateEnv: THROTTLE_AUTH_IP_LIMIT (15c.1)', () => {
+  it('defaults to 120 per window, above the per-account default of 10', () => {
+    const env = validateEnv(BASE_ENV);
+    expect(env.THROTTLE_AUTH_IP_LIMIT).toBe(120);
+    expect(env.THROTTLE_AUTH_IP_LIMIT).toBeGreaterThan(env.THROTTLE_AUTH_LIMIT);
+  });
+
+  it('is configurable', () => {
+    expect(validateEnv({ ...BASE_ENV, THROTTLE_AUTH_IP_LIMIT: '300' }).THROTTLE_AUTH_IP_LIMIT).toBe(
+      300,
+    );
+  });
+
+  it('may equal the per-account limit', () => {
+    expect(() =>
+      validateEnv({ ...BASE_ENV, THROTTLE_AUTH_LIMIT: '25', THROTTLE_AUTH_IP_LIMIT: '25' }),
+    ).not.toThrow();
+  });
+
+  it('must not be smaller than the per-account limit: the account limit could never be reached', () => {
+    expect(() =>
+      validateEnv({ ...BASE_ENV, THROTTLE_AUTH_LIMIT: '50', THROTTLE_AUTH_IP_LIMIT: '49' }),
+    ).toThrow(/THROTTLE_AUTH_IP_LIMIT: must not be smaller than THROTTLE_AUTH_LIMIT/);
+  });
+
+  it('is checked in production too, which still needs the Redis storage', () => {
+    const production = { ...BASE_ENV, NODE_ENV: 'production', REDIS_PASSWORD: 'a-real-secret' };
+    expect(() => validateEnv({ ...production, THROTTLE_AUTH_IP_LIMIT: '5' })).toThrow(
+      /THROTTLE_AUTH_IP_LIMIT/,
+    );
+    expect(() => validateEnv(production)).not.toThrow();
+  });
+
+  it.each(['0', '-1', '1.5', 'many'])('rejects %s', (value) => {
+    expect(() => validateEnv({ ...BASE_ENV, THROTTLE_AUTH_IP_LIMIT: value })).toThrow(
+      /THROTTLE_AUTH_IP_LIMIT/,
+    );
+  });
+});

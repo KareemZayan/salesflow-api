@@ -2,6 +2,7 @@ import Redis from 'ioredis';
 import { QueueConfig, RedisConfig } from '../../config/app.config';
 import { failFastRedisOptions } from '../redis/redis-client.options';
 import { THROTTLE_HIT_SCRIPT } from './throttle-hit.script';
+import { THROTTLE_LOGIN_SCRIPT } from './throttle-login.script';
 
 // The few Redis operations the storage needs, so its failure handling can be tested with a fake that
 // fails, stalls or answers garbage on demand (redis-throttler.storage.spec.ts) and the real client
@@ -14,6 +15,15 @@ export interface ThrottleRedis {
     limit: number,
     member: string,
   ): Promise<unknown>;
+  // The combined login decision (throttle-login.script.ts): the IP key and the account key, together.
+  loginHit(
+    ipKey: string,
+    accountKey: string,
+    ttlMs: number,
+    ipLimit: number,
+    accountLimit: number,
+    member: string,
+  ): Promise<unknown>;
   ping(): Promise<unknown>;
   whenReady(timeoutMs: number): Promise<void>;
   evictionSettings(): Promise<{ policy: string; maxmemoryBytes: number }>;
@@ -21,6 +31,14 @@ export interface ThrottleRedis {
 }
 
 type ScriptedRedis = Redis & {
+  throttleLoginHit(
+    ipKey: string,
+    accountKey: string,
+    ttlMs: number,
+    ipLimit: number,
+    accountLimit: number,
+    member: string,
+  ): Promise<unknown>;
   throttleHit(
     hitsKey: string,
     windowKey: string,
@@ -39,6 +57,7 @@ export function createThrottleRedis(
 ): ThrottleRedis {
   const redis = new Redis(failFastRedisOptions(redisConfig, queue, 'throttle')) as ScriptedRedis;
   redis.defineCommand('throttleHit', { numberOfKeys: 2, lua: THROTTLE_HIT_SCRIPT });
+  redis.defineCommand('throttleLoginHit', { numberOfKeys: 2, lua: THROTTLE_LOGIN_SCRIPT });
   // Without a listener an 'error' event would throw inside the client. What the failures mean is
   // decided (and logged, once per outage) by the storage, from what requests experience.
   redis.on('error', () => undefined);
@@ -46,6 +65,8 @@ export function createThrottleRedis(
   return {
     hit: (hitsKey, windowKey, ttlMs, limit, member) =>
       redis.throttleHit(hitsKey, windowKey, ttlMs, limit, member),
+    loginHit: (ipKey, accountKey, ttlMs, ipLimit, accountLimit, member) =>
+      redis.throttleLoginHit(ipKey, accountKey, ttlMs, ipLimit, accountLimit, member),
     ping: () => redis.ping(),
     whenReady: (timeoutMs) =>
       redis.status === 'ready'

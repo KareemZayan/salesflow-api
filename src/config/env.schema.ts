@@ -70,12 +70,24 @@ export const envSchema = z
     THROTTLE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
     THROTTLE_LIMIT: z.coerce.number().int().positive().default(100),
     THROTTLE_AUTH_LIMIT: z.coerce.number().int().positive().default(10),
+    // Login only: how many attempts ONE client IP (an IPv6 /64) may make per window, whatever email it
+    // tries. Counts admitted attempts, successful or not. Behind a shared NAT many people share it, so it
+    // is deliberately generous; it exists to bound password spraying and the Redis keys one IP can create.
+    THROTTLE_AUTH_IP_LIMIT: z.coerce.number().int().positive().default(120),
     // Where the rate-limit counters live. `redis` (default): shared by every instance; if Redis cannot
     // be consulted, auth routes answer 503 THROTTLE_UNAVAILABLE and other routes use a per-instance
     // limiter (ADR 0016). `memory`: per process, for development and tests only; refused in production.
     THROTTLE_STORAGE: z.enum(['redis', 'memory']).default('redis'),
   })
   .superRefine((env, ctx) => {
+    // Otherwise the per-account limit could never be reached: the IP would be refused first.
+    if (env.THROTTLE_AUTH_IP_LIMIT < env.THROTTLE_AUTH_LIMIT) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['THROTTLE_AUTH_IP_LIMIT'],
+        message: 'must not be smaller than THROTTLE_AUTH_LIMIT',
+      });
+    }
     // Prisma's transaction timeout cannot interrupt a statement blocked on a lock (the connection
     // stays busy until the lock frees up); only the server-side statement timeout can. So it must be
     // the smaller of the two for the transaction limit to mean anything. ADR 0016.

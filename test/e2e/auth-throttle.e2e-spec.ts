@@ -41,8 +41,8 @@ describe('Auth throttling (e2e)', () => {
     const res = await wrongLogin('10.0.0.1').expect(429);
 
     expect(res.body).toMatchObject({ statusCode: 429, code: ERROR_CODES.TOO_MANY_REQUESTS });
-    // The named `auth` throttler suffixes its headers with the throttler name.
-    expect(res.headers['retry-after-auth']).toBeDefined();
+    // The named `login` throttler suffixes its headers with the throttler name.
+    expect(res.headers['retry-after-login']).toBeDefined();
   });
 
   it('counts per email: other accounts from the same IP are not blocked', async () => {

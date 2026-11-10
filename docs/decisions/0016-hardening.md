@@ -1,8 +1,9 @@
 # ADR 0016: Hardening (Phase 15)
 
 Status: in progress. 15a (database failure handling), 15b (required NODE_ENV, production guards,
-no-store) and 15c (rate-limit counters in Redis) are implemented. 15d-15g append their sections here as
-they land (tenant isolation and the RLS decision, operations, performance measurement).
+no-store), 15c (rate-limit counters in Redis) and 15c.1 (auth throttling hardening) are implemented.
+15d-15g append their sections here as they land (tenant isolation and the RLS decision, operations,
+performance measurement).
 
 Builds on [ADR 0002](0002-tenant-scoping.md) (tenant scoping), [ADR 0004](0004-users-admin.md) (the
 advisory locks) and [ADR 0014](0014-audit-logs.md) (fail-closed audit writes).
@@ -255,10 +256,10 @@ mutation-checked (a script that takes the client time fails two tests).
 
 ### What happens when Redis cannot be consulted
 
-| Throttler                                | Redis down, slow, script error, or a malformed reply                                                                                                                                                          |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth` (login, refresh, change-password) | **Fail closed.** `503`, code `THROTTLE_UNAVAILABLE` (its own code, not `DATABASE_UNAVAILABLE`), `Retry-After: 5`, standard body with `requestId`, no mention of Redis. The request never reaches the handler. |
-| `default` (everything else)              | The library in-memory limiter of this instance, same limit. **Never unlimited, but N times weaker with N instances** until Redis is back. Documented as accepted.                                             |
+| Throttler                                                                                                                                   | Redis down, slow, script error, or a malformed reply                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth` (login, refresh, change-password, **logout**; see 15c.1: login has its own combined limiter now and logout is no longer fail-closed) | **Fail closed.** `503`, code `THROTTLE_UNAVAILABLE` (its own code, not `DATABASE_UNAVAILABLE`), `Retry-After: 5`, standard body with `requestId`, no mention of Redis. The request never reaches the handler. |
+| `default` (everything else)                                                                                                                 | The library in-memory limiter of this instance, same limit. **Never unlimited, but N times weaker with N instances** until Redis is back. Documented as accepted.                                             |
 
 Consistent with ADR 0014: a security control that cannot run stops the operation. The cost is that nobody can
 log in during a Redis outage (readiness reports not-ready then anyway). Any error is a failure: a script error
@@ -332,3 +333,136 @@ follow-up is needed.
   times, then fast; the breaker opens; it closes again by itself; one outage line, one recovery line);
   `auth-throttle` now runs on Redis; production refuses `memory`.
 - Real-time parity cannot hit the window boundary to the millisecond; it tests 100 ms either side.
+
+## 15c.1. Auth throttling hardening
+
+Follow-up to 15c, found in its post-merge review. The merged 15c code and history are unchanged; this
+changes how the login route is limited and corrects one claim in the 15c section above (its route
+list omitted `logout`).
+
+### Three problems, three fixes
+
+1. **IPv6 rotation.** The library default tracker groups IPv6 clients by /64; our own auth tracker used the
+   raw `req.ip`. A customer owns 2^64 addresses, so rotating through them gave a fresh bucket for every
+   guess at one account. `clientIp()` now applies the library `normalizeIp(ip, 64)` for every throttler
+   that uses our trackers, and the same 64 is passed to the module as `ipv6SubnetPrefix`
+   (`IPV6_SUBNET_PREFIX`), so the default tracker and ours cannot disagree. IPv4 is unchanged; an
+   IPv4-mapped IPv6 address (`::ffff:1.2.3.4`, what a dual-stack socket reports) is read as the IPv4 address.
+2. **No limit per IP on login.** The only login bucket was per IP + email, so one IP could try any number of
+   different accounts: unlimited password spraying, and an Argon2 verification per attempt (unknown emails
+   take the dummy-hash path, so they cost the same). It also let one IP create a Redis key per email.
+3. **Logout failed closed.** `logout` carried `@AuthThrottle()`, so during a Redis outage nobody could end a
+   session. It now has no marker and runs on `default` (below).
+
+### The login limiter: one atomic decision
+
+Two separate counters cannot be both bounded and fair, and the first attempt at the design showed why:
+
+- **account first, then IP:** an IP over its limit still creates an account key for every new email before
+  being refused, so Redis keys are not bounded;
+- **IP first, then account:** every request, including ones the account limit will refuse, spends the IP
+  budget, so one hammered account (or one bot) locks everybody behind a shared NAT out.
+
+So login has one throttler, `login`, and one Lua operation (`throttle-login.script.ts`) that decides both
+limits together. Phases:
+
+1. **Validate, no writes:** every argument and both key types. A bad argument or a wrong-typed key fails
+   here and changes nothing.
+2. **Decide, reads only:** live hits are counted with `ZCOUNT` / `ZRANGEBYSCORE`. `ZREMRANGEBYSCORE` is a
+   write, so trimming is _not_ done here. First the IP (`count >= THROTTLE_AUTH_IP_LIMIT` -> refused by the
+   IP), then the account (`count >= THROTTLE_AUTH_LIMIT` -> refused by the account).
+3. **Admit, the only writes:** trim expired hits, add one hit to the IP set and one to the account set, renew
+   both TTLs.
+
+Consequences, each covered by a test against a real Redis:
+
+| Situation                      | Result   | IP budget spent | Key created             |
+| ------------------------------ | -------- | --------------- | ----------------------- |
+| IP at its limit                | 429      | no              | **none**                |
+| account at its limit, IP under | 429      | **no**          | **none**                |
+| both allow                     | proceeds | yes, 1          | at most one account key |
+
+- **Bounded keys.** A key can only come into existence in the admit phase, and an IP admits at most
+  `THROTTLE_AUTH_IP_LIMIT` attempts per window, so one IP creates at most that many account keys per window
+  plus one IP key, however many emails it sends. 5,000 different emails from one IP leave exactly 1 + 120
+  keys; 5,000 more leave the key set (and the IP set) byte for byte identical.
+- **Shared NAT.** Hammering one account costs the IP only `THROTTLE_AUTH_LIMIT` of its budget, so the other
+  users behind that address keep the rest. Residual: someone behind the same address who sends
+  `THROTTLE_AUTH_IP_LIMIT` _different_ emails a minute exhausts the budget for everybody; any per-IP limit
+  has that property. Counting only failed logins would soften it, but needs a post-handler hook; deferred.
+- **Account isolation.** The account bucket is `sha256(<normalized ip>|<normalized email>)`, never the email
+  alone: the same email from another IP is another bucket, so an attacker cannot lock a victim out from the
+  victim's own IP, and several IPs against one account each get their own allowance (each still bounded by
+  its own IP limit). No global per-account ceiling, by decision: it would let a distributed attacker lock
+  the victim out.
+- **No partial state.** Redis scripts do not roll back, so every check that can fail comes before the first
+  write; a refused request performs no write at all (tested: expired hits are not trimmed and no TTL is
+  renewed by a refusal). Writes that follow are on keys already type-checked, with validated arguments; the
+  only way left to fail mid-way is Redis running out of memory, which fails the login closed.
+- **Concurrency.** One script is one atomic step, so there is no gap between "check" and "count": 1,000
+  parallel attempts on one account over four connections admit exactly 10; 1,000 parallel different emails
+  admit exactly 120 and create exactly 120 account keys; with a mix, the hits in the IP set equal the sum
+  of the hits in the account sets (an admission never adds one without the other).
+- **Time** is Redis `TIME`, read once; no client clock takes part (tested with clocks an hour apart).
+- **One Redis call per login** (the two limits are decided together).
+
+Keys: `<prefix>:throttle:login:ip:<sha256>` and `<prefix>:throttle:login:account:<sha256>`, each with a TTL.
+No address and no email is stored; both are hashed inside the storage, which receives them as
+`<ip>|<email>` (split at the first `|`: an address never contains one, an email may).
+
+### Limits
+
+| Setting                  | Default | Meaning                                                             |
+| ------------------------ | ------- | ------------------------------------------------------------------- |
+| `THROTTLE_AUTH_LIMIT`    | 10      | attempts per IP + email per window (unchanged)                      |
+| `THROTTLE_AUTH_IP_LIMIT` | **120** | attempts per client IP (an IPv6 /64) per window, whatever the email |
+
+Startup requires the IP limit to be at least the account limit (otherwise the account limit could never be
+reached). Counts are of admitted attempts, successful or not. 120 is above what an office logging in
+together needs and about equal to the general per-IP limit (100); a mobile carrier's shared IPv4 may need
+more. It is a setting, not a constant.
+
+### Which route runs what
+
+| Route                        | Throttler          | Tracker | If Redis fails                             |
+| ---------------------------- | ------------------ | ------- | ------------------------------------------ |
+| `login`                      | `login` (combined) | `<ip>   | <email>`                                   | **503** `THROTTLE_UNAVAILABLE`, fail closed, no fallback |
+| `refresh`, `change-password` | `auth` (unchanged) | `ip`    | 503, fail closed                           |
+| `logout`                     | `default`          | `ip`    | per-instance limiter: works, still limited |
+| everything else              | `default`          | `ip`    | per-instance limiter                       |
+
+A route runs exactly one throttler. `FAIL_CLOSED_THROTTLERS` is `{ auth, login }`; `default` is deliberately
+absent. Refresh and change-password were not changed (still per IP, per route, 10 per window), which is
+tight for a very large office behind one address; flagged, not touched.
+
+**Visible change:** the 429 header for login is now `Retry-After-login` (it was `Retry-After-auth`); the
+header is named after the throttler. Nothing consumes it yet.
+
+**Memory mode** (`THROTTLE_STORAGE=memory`, development and tests only, refused in production): the library
+in-memory storage has no combined operation, so login has only the per-account limit there. The IP limit is
+tested against Redis.
+
+### Failure and recovery
+
+Unchanged from 15c: any Redis problem is a failure; 3 in a row open the breaker for 5 s; one request then
+probes; the outage and the recovery are each logged once. For login a failure is a `503`; for logout nothing
+changes, because it never depended on Redis. A malformed `<ip>|<email>` key (a bug in the tracker) is a plain
+error, not a Redis failure: it does not move the breaker and is never read as "allowed". Tested: dead
+Redis, stalled Redis (login fails fast once the breaker is open, logout answers `204` in the middle of the
+outage, and the session it ended is really gone after recovery).
+
+### Tests
+
+- Unit: trackers (IPv4, `::ffff:`, /64, zone id, missing address, the `|` separator), the storage's login
+  path with a fake client (hashed keys, account isolation, reply validation, breaker, no fallback,
+  malformed key), the script's write ordering on its source, the options and the route-to-throttler
+  mapping through the real `ThrottlerGuard` and the real `AuthController` decorators, env rules.
+- Integration (real Redis, 30 tests): cardinality (5,000 emails; 5,000 more with the key set unchanged;
+  three IPs; a smaller limit), concurrency on one and four connections, shared-NAT budget, Lua safety
+  (wrong-typed keys, invalid arguments, no write on refusal), a randomized comparison against a reference
+  model, expiry, clock skew, namespaces next to plain counters and BullMQ. Mutation-checked: creating the
+  account key before the IP check fails 12 tests, spending IP budget on an account refusal 7, trimming
+  during the decision 1, scoping accounts by email alone 4.
+- E2E (20 tests): IP cut-off with `Retry-After-login`, no new keys after the cut-off, /64 rotation, IPv4
+  and IPv4-mapped addresses, several IPs against one account, shared NAT, valid login unchanged, non-string
+  emails, no PII in Redis, dead and stalled Redis, logout during both.

@@ -40,7 +40,7 @@ Users are created by an admin (no public sign-up). `POST /api/v1/auth/login` ret
 - **Refresh**: `POST /auth/refresh` rotates the refresh token. Sending an already-used token again within `REFRESH_REUSE_GRACE_SECONDS` (default 10) answers **409 `TOKEN_ROTATED_RECENTLY`**: the session is still valid, so do **not** log the user out; retry with the token from the latest successful response. Replaying a token after that window answers 401 `TOKEN_REUSED` and revokes the whole session.
 - **Logout**: `POST /auth/logout` with the refresh token in the body; always 204.
 - **Change password**: revokes all refresh tokens and returns a new pair. Access tokens issued earlier stay valid until they expire.
-- **Rate limiting**: login is limited per IP + email (`THROTTLE_AUTH_LIMIT` per `THROTTLE_TTL_SECONDS`), every other route per IP (`THROTTLE_LIMIT`). The counters live in Redis and are shared by every instance (see "Rate limiting" below).
+- **Rate limiting**: login is limited per IP **and** per IP + email (`THROTTLE_AUTH_IP_LIMIT`, `THROTTLE_AUTH_LIMIT`, per `THROTTLE_TTL_SECONDS`), every other route per IP (`THROTTLE_LIMIT`). IPv6 clients count per /64. The counters live in Redis and are shared by every instance (see "Rate limiting" below).
 
 ### Behind a reverse proxy (`TRUST_PROXY`)
 
@@ -66,12 +66,29 @@ allowing N times as many attempts. It is a **sliding window**: a request counts 
 after it is made. `THROTTLE_STORAGE=memory` (per process, lost on restart) exists for development and tests
 only and is **refused when `NODE_ENV=production`**. Design and numbers: [ADR 0016](docs/decisions/0016-hardening.md).
 
+**Which limit applies where:**
+
+| Route                          | Limit                                                                                                                                          | Tracker                          |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `POST /auth/login`             | **both**, decided together: `THROTTLE_AUTH_IP_LIMIT` (default 120) per client IP, and `THROTTLE_AUTH_LIMIT` (default 10) per client IP + email | IP (an IPv6 /64), and IP + email |
+| `refresh`, `change-password`   | `THROTTLE_AUTH_LIMIT` per IP, per route                                                                                                        | IP                               |
+| `logout` and every other route | `THROTTLE_LIMIT` (default 100) per IP                                                                                                          | IP                               |
+
+Login is cut off when _either_ limit is reached, with `429` and a `Retry-After-login` header. The two are
+decided in one atomic Redis operation: a refused attempt creates no Redis key, and an attempt refused for
+one account does not use up the IP's budget, so one hammered account cannot lock out the other people behind
+a shared address. A single IP can therefore create at most `THROTTLE_AUTH_IP_LIMIT` account keys per window
+however many emails it tries. The same email from another IP is a separate bucket (an attacker cannot lock
+a victim out of their own IP). `THROTTLE_AUTH_IP_LIMIT` counts every admitted attempt, successful or not;
+raise it if many people behind one address (an office, a mobile carrier's NAT) sign in at once.
+Memory mode has only the per-account limit on login.
+
 **When Redis cannot be consulted** (down, slow, or the script failing) the limiter never silently turns off:
 
-| Route                                                  | While Redis is unavailable                                                                                                                            |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Login, refresh, change-password (the `auth` throttler) | **Fails closed**: `503` with code `THROTTLE_UNAVAILABLE` and `Retry-After`. The request never reaches the handler, so no password is checked.         |
-| Every other route (the `default` throttler)            | Falls back to a limiter in that instance's memory, with the same limit. **Never unlimited, but N times weaker with N instances** until Redis is back. |
+| Route                                                      | While Redis is unavailable                                                                                                                                                                                                   |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Login, refresh, change-password                            | **Fail closed**: `503` with code `THROTTLE_UNAVAILABLE` and `Retry-After`. The request never reaches the handler, so no password is checked.                                                                                 |
+| **Logout** and every other route (the `default` throttler) | Fall back to a limiter in that instance's memory, with the same limit. **Never unlimited, but N times weaker with N instances** until Redis is back. Logout keeps working, so a session can still be ended during an outage. |
 
 After 3 failures in a row a circuit breaker treats Redis as down for 5 seconds, so requests are answered at once
 instead of each waiting for the 250 ms timeout; then one request probes it. The outage and the recovery are

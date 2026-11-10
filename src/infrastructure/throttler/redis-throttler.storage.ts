@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ThrottlerOptions, ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import { ThrottleUnavailableException } from '../../common/exceptions/throttle-unavailable.exception';
@@ -20,6 +20,10 @@ export interface RedisThrottlerStorageOptions {
   // Throttlers for which "Redis unknown" must NOT mean "allowed": the request is refused with
   // 503 THROTTLE_UNAVAILABLE. Every other throttler falls back to `fallback`.
   failClosedThrottlers: ReadonlySet<string>;
+  // Throttlers decided by the COMBINED login operation (throttle-login.script.ts) instead of a plain
+  // counter, with the per-IP limit of each. Their key is `<ip>|<email>` (loginThrottleTracker); the
+  // throttler's own `limit` is the per-account limit.
+  compositeThrottlers?: ReadonlyMap<string, { ipLimit: number }>;
   // Per-instance limiter used for the other throttlers while Redis is down. It is never "unlimited",
   // but with N instances the effective limit is N times looser until Redis is back.
   fallback?: ThrottlerStorage;
@@ -40,6 +44,10 @@ export interface ThrottleStorageStats {
   rejectedDuringOutage: number;
   // Requests of the fail-open throttlers served by the per-instance fallback since the process started.
   servedByFallback: number;
+  // Combined login limiter: attempts refused because the IP was over its limit, and because the
+  // IP + email was. Counts only; nothing about who is logged.
+  blockedByIp: number;
+  blockedByAccount: number;
 }
 
 // This storage is a sliding window and nothing else: it implements the library's `blockDuration = 0`
@@ -89,12 +97,16 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnModuleInit, On
   private rejectedTotal = 0;
   private rejectedInOutage = 0;
   private fallbackServed = 0;
+  private blockedIp = 0;
+  private blockedAccount = 0;
+  private readonly composite: ReadonlyMap<string, { ipLimit: number }>;
 
   constructor(
     private readonly redis: ThrottleRedis,
     options: RedisThrottlerStorageOptions,
   ) {
     this.failClosed = options.failClosedThrottlers;
+    this.composite = options.compositeThrottlers ?? new Map();
     this.fallback = options.fallback ?? new ThrottlerStorageService();
     this.timeoutMs = options.timeoutMs ?? THROTTLE_OPERATION_TIMEOUT_MS;
     this.failureThreshold = options.breaker?.failureThreshold ?? THROTTLE_BREAKER_FAILURE_THRESHOLD;
@@ -139,22 +151,55 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnModuleInit, On
     if (blockDuration > 0) {
       throw new Error('The Redis throttler storage does not support blockDuration');
     }
+    // A malformed login key is a bug in the tracker, not a Redis problem: it must neither open the
+    // breaker nor be answered as "allowed".
+    const login = this.composite.get(throttlerName);
+    const target = login ? loginTarget(key) : undefined;
     if (!this.mayCallRedis()) {
       return this.unavailable(key, ttl, limit, throttlerName);
     }
     try {
-      const reply = await withTimeout(
-        this.redis.hit(`hits:${key}`, `window:${key}`, ttl, limit, this.newMember()),
-        this.timeoutMs,
-        'Throttle storage',
-      );
-      const record = toRecord(reply);
+      const record =
+        login && target
+          ? await withTimeout(
+              this.consultLogin(target, ttl, login.ipLimit, limit),
+              this.timeoutMs,
+              'Throttle storage',
+            )
+          : toRecord(
+              await withTimeout(
+                this.redis.hit(`hits:${key}`, `window:${key}`, ttl, limit, this.newMember()),
+                this.timeoutMs,
+                'Throttle storage',
+              ),
+            );
       this.recordSuccess();
       return record;
     } catch (error) {
       this.recordFailure(error);
       return this.unavailable(key, ttl, limit, throttlerName);
     }
+  }
+
+  private async consultLogin(
+    target: LoginTarget,
+    ttl: number,
+    ipLimit: number,
+    accountLimit: number,
+  ): Promise<ThrottlerStorageRecord> {
+    const { record, status } = toLoginRecord(
+      await this.redis.loginHit(
+        target.ipKey,
+        target.accountKey,
+        ttl,
+        ipLimit,
+        accountLimit,
+        this.newMember(),
+      ),
+    );
+    if (status === LOGIN_BLOCKED_BY_IP) this.blockedIp += 1;
+    if (status === LOGIN_BLOCKED_BY_ACCOUNT) this.blockedAccount += 1;
+    return record;
   }
 
   // Used by /health/ready. A real round trip, separate from the breaker so readiness never has to
@@ -176,6 +221,8 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnModuleInit, On
       rejectedUnavailable: this.rejectedTotal,
       rejectedDuringOutage: this.rejectedInOutage,
       servedByFallback: this.fallbackServed,
+      blockedByIp: this.blockedIp,
+      blockedByAccount: this.blockedAccount,
     };
   }
 
@@ -246,4 +293,48 @@ function toRecord(reply: unknown): ThrottlerStorageRecord {
   }
   const [totalHits, timeToExpire, isBlocked, timeToBlockExpire] = reply as number[];
   return { totalHits, timeToExpire, isBlocked: isBlocked === 1, timeToBlockExpire };
+}
+
+// Statuses returned by the login script.
+const LOGIN_ADMITTED = 0;
+const LOGIN_BLOCKED_BY_IP = 1;
+const LOGIN_BLOCKED_BY_ACCOUNT = 2;
+
+interface LoginTarget {
+  ipKey: string;
+  accountKey: string;
+}
+
+const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
+
+// `<ip>|<email>` -> the two Redis keys. Split at the FIRST `|`: an IP address never contains one, an
+// email may. Both keys are hashes, so neither the address nor the email is stored in Redis; the
+// account key is hashed from the whole `ip|email` string, which is what keeps account buckets scoped to
+// one IP (the same email from another IP is a different bucket).
+function loginTarget(key: string): LoginTarget {
+  const separator = key.indexOf('|');
+  if (separator <= 0) throw new Error('A login throttle key must be "<ip>|<email>"');
+  return {
+    ipKey: `login:ip:${sha256(key.slice(0, separator))}`,
+    accountKey: `login:account:${sha256(key)}`,
+  };
+}
+
+// The login script's reply, validated like the plain one: anything unexpected is a failure.
+function toLoginRecord(reply: unknown): { record: ThrottlerStorageRecord; status: number } {
+  if (
+    !Array.isArray(reply) ||
+    reply.length !== 4 ||
+    !reply.every((value) => typeof value === 'number' && Number.isFinite(value))
+  ) {
+    throw new Error('Throttle storage returned an unexpected reply');
+  }
+  const [status, totalHits, timeToExpire, timeToBlockExpire] = reply as number[];
+  if (![LOGIN_ADMITTED, LOGIN_BLOCKED_BY_IP, LOGIN_BLOCKED_BY_ACCOUNT].includes(status)) {
+    throw new Error('Throttle storage returned an unexpected reply');
+  }
+  return {
+    status,
+    record: { totalHits, timeToExpire, isBlocked: status !== LOGIN_ADMITTED, timeToBlockExpire },
+  };
 }

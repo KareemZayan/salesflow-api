@@ -33,6 +33,8 @@ export default defineConfig({
       // Effectively off, so only the dedicated throttling suite ever sees a 429.
       THROTTLE_LIMIT: '100000',
       THROTTLE_AUTH_LIMIT: '100000',
+      // Every suite logs in from the same address; only the login throttling suites lower this.
+      THROTTLE_AUTH_IP_LIMIT: '100000',
     },
   },
   plugins: [swc.vite({ module: { type: 'es6' } })],

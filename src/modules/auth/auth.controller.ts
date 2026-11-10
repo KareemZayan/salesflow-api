@@ -12,6 +12,7 @@ import {
 } from '@nestjs/swagger';
 import { AllowWhenPasswordChangeRequired } from '../../common/decorators/allow-password-change.decorator';
 import { AuthThrottle } from '../../common/decorators/auth-throttle.decorator';
+import { LoginThrottle } from '../../common/decorators/login-throttle.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -28,7 +29,7 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Public()
-  @AuthThrottle()
+  @LoginThrottle()
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Sign in with email and password' })
@@ -58,7 +59,6 @@ export class AuthController {
   }
 
   @Public()
-  @AuthThrottle()
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Revoke the session behind a refresh token (idempotent)' })

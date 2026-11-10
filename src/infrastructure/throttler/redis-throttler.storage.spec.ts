@@ -11,6 +11,7 @@ const HEALTHY_REPLY = [1, 60, 0, 0];
 
 const fakeClient = (): { [K in keyof ThrottleRedis]: ReturnType<typeof vi.fn> } => ({
   hit: vi.fn().mockResolvedValue(HEALTHY_REPLY),
+  loginHit: vi.fn().mockResolvedValue([0, 1, 60, 0]),
   ping: vi.fn().mockResolvedValue('PONG'),
   whenReady: vi.fn().mockResolvedValue(undefined),
   evictionSettings: vi.fn().mockResolvedValue({ policy: 'noeviction', maxmemoryBytes: 0 }),

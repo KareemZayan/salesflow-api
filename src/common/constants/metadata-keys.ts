@@ -3,3 +3,4 @@ export const ROLES_KEY = 'roles';
 export const PERMISSIONS_KEY = 'permissions';
 export const ALLOW_PASSWORD_CHANGE_KEY = 'allowWhenPasswordChangeRequired';
 export const AUTH_THROTTLE_KEY = 'authThrottle';
+export const LOGIN_THROTTLE_KEY = 'loginThrottle';
